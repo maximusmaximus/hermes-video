@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Data & Caches
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
+
+# Video / Renders / Output
+output/
+exports/
+*.mp4
+*.mov
+*.png
+*.jpg
+*.tsrct
+!tests/fixtures/*.tsrct
+
+# Secrets & Local Config
+.env
+config/.env
+*.key
+*.pem
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

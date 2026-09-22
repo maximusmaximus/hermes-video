@@ -1,0 +1,59 @@
+agent:
+  name: hermes-video
+  version: 0.1.0
+  role: Autonomous Video Director & Motion Graphics Engine
+
+budget:
+  currency: USD
+  daily_total_limit: 5.00
+  daily_controller_limit: 1.00
+  daily_worker_limit: 4.00
+  reset_window_hours: 24
+  enforcement_mode: strict  # halts inference if threshold is breached
+  db_path: data/budget.db
+
+models:
+  controller:
+    default: deepseek-v4-flash
+    fallback: llama-3.3-70b
+    provider: venice
+    base_url: https://api.venice.ai/api/v1
+    max_tokens: 4096
+    temperature: 0.4
+  worker:
+    default: deepseek-v4-flash
+    vision: qwen-2.5-vl-72b
+    image: grok-imagine-image-quality
+    provider: venice
+    base_url: https://api.venice.ai/api/v1
+
+catalog:
+  root_dir: D:\music
+  releases_dir: D:\music\releases
+  albums_dir: D:\music\albums
+  productions_dir: D:\music\productions
+  waveform_dir: D:\music\waveforms
+  artwork_dir: D:\music\artwork
+
+engine:
+  primary: tesseract
+  tesseract:
+    cli_path: C:\Users\maxin\AppData\Local\Tesseract\bin\tsrct.cmd
+    default_fps: 30
+    default_width: 1920
+    default_height: 1080
+    color_space: bt709
+  extensible_adapters:
+    - ffmpeg
+    - comfyui
+    - runway
+
+telegram:
+  enabled: true
+  chat_id: 8293122782
+  poll_interval_seconds: 3
+
+sharing:
+  method: cloudflare_tunnel
+  provider: secure-share
+  share_script: C:\Users\maxin\.gemini\antigravity\skills\secure-share\scripts\share.py
