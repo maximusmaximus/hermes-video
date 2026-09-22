@@ -118,3 +118,35 @@ Before presenting any render to the user via Telegram:
 1. **Waveform Drift Check**: Ensure video frame 0 aligns exactly with audio sample 0.
 2. **Safe Margin Compliance**: Keep text within the 90% title-safe area (especially for 9:16 where platform UI overlays obscure edges).
 3. **Codec & Compression**: Export previews with fast H.264/AAC encoding for instant mobile playback over Cloudflare tunnels; export master archival copies in ProRes 4444 or visually lossless H.265 (CRF 16).
+
+---
+
+## 8. Master Audio Muxing & Deliverable Packaging
+
+Raw render engines (like Tesseract CLI `tsrct export`) output video frames without audio. The video workflow must never present silent video or raw project descriptor files (`.tsrct`) as final deliverables.
+
+1. **Mandatory Master Audio Mux**:
+   - Always mux the master 24-bit/48kHz FLAC from `D:\music` into the exported MP4 using FFmpeg:
+     ```bash
+     ffmpeg -y -i raw_video.mp4 -i master.flac -c:v copy -c:a aac -b:a 320k -shortest final_master.mp4
+     ```
+2. **Telegram Direct Deliverable (`sendVideo`)**:
+   - Send the final `.mp4` file directly to the user's Telegram chat so it renders in the native Telegram video player with inline sound and waveform controls.
+3. **Cloudflare Tunnel Web Distribution**:
+   - Simultaneously package the render via `secure-share` (`cloudflared`) and attach an interactive `⚡ Stream via Cloudflare Tunnel` button linking to the temporary `trycloudflare.com` URL.
+
+---
+
+## 9. Telegram Responsiveness & Telemetry Lifecycle
+
+High responsiveness is mandatory for human-in-the-loop autonomous direction:
+
+1. **Zero-Latency Toast Acknowledgment (<50ms)**:
+   - The daemon must invoke `answerCallbackQuery` immediately upon receiving any button press. Never let the mobile client linger with a loading spinner.
+2. **Asynchronous Execution Threading**:
+   - Offload long-running render jobs to a background `ThreadPoolExecutor`. The Telegram polling loop must never block on video exports or network uploads.
+3. **Four-Phase Milestone Telemetry**:
+   - **Phase 1: Audio Analysis**: Report BPM, musical key, transient phrase grid, and FLAC source integrity.
+   - **Phase 2: Storyboard & Typography**: Detail scene timings, typography layout, camera movement, and Venice controller inference spend.
+   - **Phase 3: Render Preview Frame**: Extract and dispatch frame 0 (`tsrct preview --time 0.0`) via `sendPhoto` for immediate visual confirmation.
+   - **Phase 4: Deliverable & Action Gate**: Dispatch final video player with Cloudflare stream and 4K finalization buttons.

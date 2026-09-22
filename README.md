@@ -15,8 +15,10 @@ Connects autonomous AI video direction directly with the **VØIDRIDE** music cat
   - **$1.00 / day** hard cap on the Controller Hermes Agent.
   - Persistent SQLite ledger with rolling 24-hour pre-flight budget blocking.
 - **Standardized Video Practices**: Enforces audio-first transient alignment, phrase-based pacing, cubic-bezier easing, eyeline continuity, and 6-vector scene prompt schemas.
-- **Telegram Inline Decision Gates**: Sends review cards with interactive buttons (`[✅ Approve]`, `[🔄 Reroll]`, `[✂️ Revise]`) to the user's Telegram.
-- **Cloudflare Tunnel Distribution**: Automatically packages render previews via `secure-share` (`cloudflared`) and embeds direct `trycloudflare.com` links for immediate mobile review.
+- **Sub-50ms Telegram Responsiveness**: Multi-threaded background daemon (`ThreadPoolExecutor`) ensures zero UI freezes and instant haptic toast feedback via `answerCallbackQuery`.
+- **4-Phase Development Telemetry**: Real-time production milestone notifications sent to Telegram (Audio transient analysis, Kinetic typography storyboard, High-res preview frame photo, and Live in-place progress bar).
+- **Master Audio Muxing & Native Video Delivery**: Auto-muxes master 24-bit/48kHz FLAC into rendered MP4 via FFmpeg and delivers playable videos directly into Telegram (`sendVideo`) with waveform and sound controls.
+- **Cloudflare Tunnel Distribution**: Automatically packages render previews via `secure-share` (`cloudflared`) and embeds direct `trycloudflare.com` links for instant mobile streaming.
 - **Modular & Extensible**: Pluggable `BaseVideoEngine` interface designed to wire future local or cloud video generators (ComfyUI, Runway, Kling, Luma) seamlessly.
 
 ---

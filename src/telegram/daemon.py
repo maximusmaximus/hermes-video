@@ -38,6 +38,7 @@ from src.catalog.query import MusicCatalogQuery
 from src.budget.ledger import BudgetLedger
 from src.engines.base import VideoProjectSpec
 from src.engines.tesseract import TesseractEngine
+from src.engines.ffmpeg_adapter import FFmpegAdapter
 from src.sharing.cloudflare import CloudflareShare
 
 
@@ -57,6 +58,7 @@ class TelegramBotDaemon:
             daily_worker_limit=4.00,
         )
         self.engine = TesseractEngine()
+        self.ffmpeg = FFmpegAdapter()
         self.sharing = CloudflareShare()
 
         # Thread pool for asynchronous rendering jobs so polling never freezes
@@ -122,6 +124,30 @@ class TelegramBotDaemon:
         ]
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            data = json.loads(res.stdout)
+            if data.get("ok"):
+                return data["result"].get("message_id")
+        except Exception:
+            pass
+        return None
+
+    def send_video(self, video_path: str, caption: str = "", buttons: Optional[List[List[Dict[str, str]]]] = None, parse_mode: str = "HTML") -> Optional[int]:
+        """Send rendered playable MP4 directly to Telegram chat."""
+        if not os.path.exists(video_path):
+            return None
+        import subprocess
+        url = f"{self.base_url}/sendVideo"
+        cmd = [
+            "curl", "-s", "-X", "POST", url,
+            "-F", f"chat_id={self.chat_id}",
+            "-F", f"video=@{video_path}",
+            "-F", f"caption={caption}",
+            "-F", f"parse_mode={parse_mode}",
+        ]
+        if buttons:
+            cmd.extend(["-F", f"reply_markup={json.dumps({'inline_keyboard': buttons})}"])
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
             data = json.loads(res.stdout)
             if data.get("ok"):
                 return data["result"].get("message_id")
@@ -377,38 +403,45 @@ class TelegramBotDaemon:
                 message_id,
                 f"⚙️ <b>DIRECTING VIDEO: {track_name}</b>\n\n"
                 f"Progress: [{self.progress_bar(80)}] 80%\n"
-                f"• Local Tesseract document generated!\n"
-                f"• Initializing Cloudflare secure tunnel..."
+                f"• Exporting video via Tesseract engine...\n"
+                f"• Muxing master FLAC audio stream..."
             )
-            time.sleep(1.0)
+            raw_mp4 = out_dir / f"raw_t{track_num}_{aspect_ratio_code}.mp4"
+            final_mp4 = out_dir / f"{slug}_t{track_num}_{aspect_ratio_code}_final.mp4"
 
-            # Step 4: Cloudflare Tunnel Packaging
-            share_res = self.sharing.package_and_share(str(tsrct_file))
+            self.engine.export(str(tsrct_file), str(raw_mp4))
+            if track and track.audio_path and os.path.exists(track.audio_path):
+                self.ffmpeg.mux_audio_video(str(raw_mp4), track.audio_path, str(final_mp4), shortest=True)
+            else:
+                final_mp4 = raw_mp4
+
+            # Step 5: Cloudflare Tunnel Packaging
+            share_res = self.sharing.package_and_share(str(final_mp4))
             cf_url = share_res.external_url or share_res.local_url or "https://preview.trycloudflare.com"
 
-            # ── Notification 4: Review Gate Ready ──
-            budget = self.budget.get_budget_summary()
-            text = (
-                f"🎉 <b>VIDEO READY FOR REVIEW</b>\n\n"
-                f"<b>Track:</b> {track_name}\n"
-                f"<b>Album:</b> {album.title if album else slug}\n"
-                f"<b>Format:</b> {ratio} | <b>Duration:</b> 15.0s\n"
-                f"<b>Budget Remaining:</b> ${budget['controller_remaining_usd']:.4f} (Controller) / ${budget['total_remaining_usd']:.2f} (Total)\n\n"
-                f"Stream or download your render package via Cloudflare Tunnel:"
+            # ── Notification 4: Deliver Native Video Directly to Telegram ──
+            caption = (
+                f"🎬 <b>{track_name.upper()} — VIDEO MASTER</b>\n\n"
+                f"• <b>Album:</b> {album.title if album else slug}\n"
+                f"• <b>Format:</b> {ratio} | <b>Duration:</b> 15.0s\n"
+                f"• <b>Engine:</b> Tesseract 0.1.0 + Master FLAC Audio Mux\n"
+                f"• <b>Status:</b> Rendered & Delivered!"
             )
-
             buttons = [
-                [{"text": "⚡ Stream Preview (Cloudflare)", "url": cf_url}],
-                [
-                    {"text": "🚀 Finalize 4K Master", "callback_data": f"finalize:{slug}:{track_num}"},
-                    {"text": "🔄 Reroll Treatment", "callback_data": f"render:{slug}:{track_num}:{aspect_ratio_code}"}
-                ],
-                [
-                    {"text": "🎵 Choose Another Track", "callback_data": f"album:{slug}"},
-                    {"text": "🏠 Main Menu", "callback_data": "nav:home"}
-                ]
+                [{"text": "⚡ Stream via Cloudflare Tunnel", "url": cf_url}],
+                [{"text": "🚀 Finalize 4K Master", "callback_data": f"finalize:{slug}:{track_num}"}],
+                [{"text": "🎵 Choose Another Track", "callback_data": f"album:{slug}"}, {"text": "🏠 Main Menu", "callback_data": "nav:home"}]
             ]
-            self.edit_message(message_id, text, buttons)
+            self.send_video(str(final_mp4), caption=caption, buttons=buttons)
+
+            self.edit_message(
+                message_id,
+                f"🎉 <b>VIDEO DELIVERED TO CHAT!</b>\n\n"
+                f"• <b>Project:</b> {track_name}\n"
+                f"• <b>Cloudflare Stream:</b> {cf_url}\n"
+                f"• Check the video player delivered above in this chat!",
+                buttons=[[{"text": "🏠 Main Menu", "callback_data": "nav:home"}]]
+            )
 
         except Exception as e:
             traceback.print_exc()
@@ -460,7 +493,7 @@ class TelegramBotDaemon:
             self.send_message(
                 f"🎬 <b>PHASE 2: ALBUM TEASER STORYBOARD & KINETIC TYPOGRAPHY</b>\n\n"
                 f"• <b>Intro [0:00 - 0:04]:</b> Glitch transition reveals album title & VØIDRIDE monogram\n"
-                f"• <b>Showcase [0:04 - 0:24]:</b> Rapid cuts through tracks 1-{min(track_count, 6)} with synchronized kinetic titles\n"
+                f"• <b>Showcase [0:04 - 0:24]:</b> Rapid cuts through tracks with synchronized kinetic titles\n"
                 f"• <b>Outro [0:24 - 0:30]:</b> Master release artwork zoom, audio fadeout, streaming callout\n"
                 f"• <b>Controller Spend:</b> $0.0025 (Venice deepseek-v4-flash)"
             )
@@ -505,42 +538,51 @@ class TelegramBotDaemon:
                     )
                 )
 
+            # Step 4: Export Raw Video & Mux Master Audio
             self.edit_message(
                 message_id,
                 f"🔥 <b>CREATING ALBUM TEASER: {album_name}</b>\n\n"
                 f"Progress: [{self.progress_bar(80)}] 80%\n"
-                f"• Tesseract multi-scene teaser generated!\n"
-                f"• Packaging via Cloudflare secure tunnel..."
+                f"• Exporting video montage via Tesseract...\n"
+                f"• Muxing master FLAC audio stream..."
             )
-            time.sleep(1.0)
+            raw_mp4 = out_dir / f"raw_teaser_{aspect_ratio_code}.mp4"
+            final_mp4 = out_dir / f"{slug}_album_teaser_{aspect_ratio_code}_final.mp4"
 
-            # Step 4: Cloudflare Tunnel Packaging
-            share_res = self.sharing.package_and_share(str(tsrct_file))
+            self.engine.export(str(tsrct_file), str(raw_mp4))
+            first_track = album.tracks[0] if album and album.tracks else None
+            if first_track and first_track.audio_path and os.path.exists(first_track.audio_path):
+                self.ffmpeg.mux_audio_video(str(raw_mp4), first_track.audio_path, str(final_mp4), shortest=True)
+            else:
+                final_mp4 = raw_mp4
+
+            # Step 5: Cloudflare Tunnel Packaging
+            share_res = self.sharing.package_and_share(str(final_mp4))
             cf_url = share_res.external_url or share_res.local_url or "https://preview.trycloudflare.com"
 
-            # ── Notification 4: Review Gate Ready ──
-            budget = self.budget.get_budget_summary()
-            text = (
-                f"🎉 <b>ALBUM TEASER READY FOR REVIEW</b>\n\n"
-                f"<b>Album:</b> {album_name}\n"
-                f"<b>Format:</b> {ratio} | <b>Duration:</b> 30.0s (Showcase)\n"
-                f"<b>Controller Spent:</b> ${budget['controller_used_usd']:.4f} / ${budget['controller_limit_usd']:.2f}\n"
-                f"<b>Total Daily Remaining:</b> ${budget['total_remaining_usd']:.2f}\n\n"
-                f"Stream or download the teaser package via Cloudflare Tunnel:"
+            # ── Notification 4: Deliver Native Video Directly to Telegram ──
+            caption = (
+                f"🎬 <b>{album_name.upper()} — ALBUM TEASER MASTER</b>\n\n"
+                f"• <b>Audio Track:</b> {first_track.title if first_track else 'Master Track'}\n"
+                f"• <b>Format:</b> {ratio} | <b>Duration:</b> 30.0s (Showcase)\n"
+                f"• <b>Engine:</b> Tesseract 0.1.0 + Master FLAC Audio Mux\n"
+                f"• <b>Status:</b> Rendered & Delivered!"
             )
-
             buttons = [
-                [{"text": "⚡ Stream Teaser (Cloudflare)", "url": cf_url}],
-                [
-                    {"text": "🚀 Export Full 4K Teaser", "callback_data": f"finalize:{slug}:teaser"},
-                    {"text": "🔄 Reroll Teaser Cuts", "callback_data": f"run_teaser:{slug}:{aspect_ratio_code}"}
-                ],
-                [
-                    {"text": "🎵 Browse Individual Tracks", "callback_data": f"album:{slug}"},
-                    {"text": "🏠 Main Menu", "callback_data": "nav:home"}
-                ]
+                [{"text": "⚡ Stream via Cloudflare Tunnel", "url": cf_url}],
+                [{"text": "🚀 Export Full 4K Teaser", "callback_data": f"finalize:{slug}:teaser"}],
+                [{"text": "🎵 Browse Individual Tracks", "callback_data": f"album:{slug}"}, {"text": "🏠 Main Menu", "callback_data": "nav:home"}]
             ]
-            self.edit_message(message_id, text, buttons)
+            self.send_video(str(final_mp4), caption=caption, buttons=buttons)
+
+            self.edit_message(
+                message_id,
+                f"🎉 <b>ALBUM TEASER DELIVERED TO CHAT!</b>\n\n"
+                f"• <b>Album:</b> {album_name}\n"
+                f"• <b>Cloudflare Stream:</b> {cf_url}\n"
+                f"• Check the video player delivered above in this chat!",
+                buttons=[[{"text": "🏠 Main Menu", "callback_data": "nav:home"}]]
+            )
 
         except Exception as e:
             traceback.print_exc()

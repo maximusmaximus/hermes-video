@@ -113,7 +113,7 @@ class TelegramGateway:
         ]
 
         if buttons:
-            keyboard = [[btn.to_dict() for btn in row] for row in buttons]
+            keyboard = [[btn.to_dict() if hasattr(btn, "to_dict") else btn for btn in row] for row in buttons]
             cmd.extend(["-F", f"reply_markup={json.dumps({'inline_keyboard': keyboard})}"])
 
         try:
@@ -123,6 +123,42 @@ class TelegramGateway:
                 return data["result"].get("message_id")
         except Exception as e:
             print(f"[ERROR] Failed to send Telegram photo: {e}")
+        return None
+
+    def send_video(
+        self,
+        video_path: str,
+        caption: str = "",
+        buttons: Optional[List[List[TelegramButton]]] = None,
+        parse_mode: str = "HTML",
+    ) -> Optional[int]:
+        """Send a playable MP4 video file directly to Telegram."""
+        if self.dry_run or not self.bot_token or not os.path.exists(video_path):
+            print(f"[DRY-RUN VIDEO] {video_path} - Caption: {caption}")
+            return 999997
+
+        url = f"{self.base_url}/sendVideo"
+        import subprocess
+
+        cmd = [
+            "curl", "-s", "-X", "POST", url,
+            "-F", f"chat_id={self.chat_id}",
+            "-F", f"video=@{video_path}",
+            "-F", f"caption={caption}",
+            "-F", f"parse_mode={parse_mode}",
+        ]
+
+        if buttons:
+            keyboard = [[btn.to_dict() if hasattr(btn, "to_dict") else btn for btn in row] for row in buttons]
+            cmd.extend(["-F", f"reply_markup={json.dumps({'inline_keyboard': keyboard})}"])
+
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            data = json.loads(res.stdout)
+            if data.get("ok"):
+                return data["result"].get("message_id")
+        except Exception as e:
+            print(f"[ERROR] Failed to send Telegram video: {e}")
         return None
 
     def send_concept_review_gate(
