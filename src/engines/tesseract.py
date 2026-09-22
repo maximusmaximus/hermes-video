@@ -111,7 +111,7 @@ class TesseractEngine(BaseVideoEngine):
         out.parent.mkdir(parents=True, exist_ok=True)
 
         # tsrct preview --project <PROJECT> --time <TIME> --output <OUTPUT>
-        time_str = f"{timestamp_seconds:.3f}s"
+        time_str = f"{timestamp_seconds:.3f}"
         cmd = [
             str(self.cli_path),
             "preview",

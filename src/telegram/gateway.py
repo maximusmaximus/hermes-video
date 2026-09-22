@@ -89,6 +89,42 @@ class TelegramGateway:
             print(f"[ERROR] Failed to send Telegram message: {e}")
         return None
 
+    def send_photo(
+        self,
+        photo_path: str,
+        caption: str = "",
+        buttons: Optional[List[List[TelegramButton]]] = None,
+        parse_mode: str = "HTML",
+    ) -> Optional[int]:
+        """Send a photo image file to Telegram."""
+        if self.dry_run or not self.bot_token or not os.path.exists(photo_path):
+            print(f"[DRY-RUN PHOTO] {photo_path} - Caption: {caption}")
+            return 999998
+
+        url = f"{self.base_url}/sendPhoto"
+        import subprocess
+
+        cmd = [
+            "curl", "-s", "-X", "POST", url,
+            "-F", f"chat_id={self.chat_id}",
+            "-F", f"photo=@{photo_path}",
+            "-F", f"caption={caption}",
+            "-F", f"parse_mode={parse_mode}",
+        ]
+
+        if buttons:
+            keyboard = [[btn.to_dict() for btn in row] for row in buttons]
+            cmd.extend(["-F", f"reply_markup={json.dumps({'inline_keyboard': keyboard})}"])
+
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            data = json.loads(res.stdout)
+            if data.get("ok"):
+                return data["result"].get("message_id")
+        except Exception as e:
+            print(f"[ERROR] Failed to send Telegram photo: {e}")
+        return None
+
     def send_concept_review_gate(
         self,
         project_title: str,
