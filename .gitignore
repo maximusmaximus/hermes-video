@@ -55,3 +55,4 @@ config/.env
 *~
 .DS_Store
 Thumbs.db
+tesseract_schema.json

@@ -39,6 +39,7 @@ from src.budget.ledger import BudgetLedger
 from src.engines.base import VideoProjectSpec
 from src.engines.tesseract import TesseractEngine
 from src.engines.ffmpeg_adapter import FFmpegAdapter
+from src.engines.motion_director import MotionDirector
 from src.sharing.cloudflare import CloudflareShare
 
 
@@ -59,6 +60,7 @@ class TelegramBotDaemon:
         )
         self.engine = TesseractEngine()
         self.ffmpeg = FFmpegAdapter()
+        self.motion = MotionDirector()
         self.sharing = CloudflareShare()
 
         # Thread pool for asynchronous rendering jobs so polling never freezes
@@ -367,60 +369,49 @@ class TelegramBotDaemon:
             )
             time.sleep(1.0)
 
-            # Step 3: Tesseract Project Creation
+            # Step 3: Motion Director Video Authoring
             out_dir = ROOT_DIR / "output" / slug
             out_dir.mkdir(parents=True, exist_ok=True)
-            tsrct_file = out_dir / f"{slug}_t{track_num}_{aspect_ratio_code}.tsrct"
+            final_mp4 = out_dir / f"{slug}_t{track_num}_{aspect_ratio_code}_final.mp4"
 
             w = 1920 if ratio == "16:9" else (1080 if ratio == "9:16" else 1080)
             h = 1080 if ratio == "16:9" else (1920 if ratio == "9:16" else 1080)
 
-            cover_art = None
-            if track and track.cover_art_path:
-                cover_art = track.cover_art_path
-            elif album and album.cover_art_path:
-                cover_art = album.cover_art_path
-
-            spec = VideoProjectSpec(
-                name=f"{album.title if album else slug} - {track_name}",
-                width=w,
-                height=h,
-                duration=15.0,
-                aspect_ratio=ratio,
-                audio_track_path=track.audio_path if track else None,
-                cover_art_path=cover_art,
-            )
-            self.engine.create_project(spec, str(tsrct_file))
-
-            # ── Notification 3: Render Preview Frame & Send Photo ──
-            preview_png = out_dir / f"preview_t{track_num}_{aspect_ratio_code}.png"
-            prev_res = self.engine.render_preview(str(tsrct_file), 0.0, str(preview_png))
-            if prev_res.success and preview_png.exists():
-                self.send_photo(
-                    str(preview_png),
-                    caption=(
-                        f"📸 <b>PHASE 3: TESSERACT RENDER PREVIEW (FRAME 00:00.000)</b>\n\n"
-                        f"• <b>Project:</b> {album.title if album else slug} — {track_name}\n"
-                        f"• <b>Resolution:</b> {w}x{h} ({ratio})\n"
-                        f"• <b>Engine:</b> Tesseract 0.1.0 (Local GPU)"
-                    )
-                )
-
             self.edit_message(
                 message_id,
                 f"⚙️ <b>DIRECTING VIDEO: {track_name}</b>\n\n"
-                f"Progress: [{self.progress_bar(80)}] 80%\n"
-                f"• Exporting video via Tesseract engine...\n"
-                f"• Muxing master FLAC audio stream..."
+                f"Progress: [{self.progress_bar(70)}] 70%\n"
+                f"• Synthesizing dynamic camera movement on artwork...\n"
+                f"• Generating real-time audio-reactive neon waveform...\n"
+                f"• Compositing brutalist cyberpunk HUD metadata overlay..."
             )
-            raw_mp4 = out_dir / f"raw_t{track_num}_{aspect_ratio_code}.mp4"
-            final_mp4 = out_dir / f"{slug}_t{track_num}_{aspect_ratio_code}_final.mp4"
 
-            self.engine.export(str(tsrct_file), str(raw_mp4))
-            if track and track.audio_path and os.path.exists(track.audio_path):
-                self.ffmpeg.mux_audio_video(str(raw_mp4), track.audio_path, str(final_mp4), shortest=True)
-            else:
-                final_mp4 = raw_mp4
+            res_path = self.motion.render_track_visualizer(
+                slug=slug,
+                track_number=track_num,
+                aspect_ratio=ratio,
+                duration=15.0,
+                output_path=str(final_mp4),
+            )
+
+            # ── Notification 3: Render Preview Frame & Send Photo ──
+            preview_png = out_dir / f"preview_t{track_num}_{aspect_ratio_code}.png"
+            cmd_prev = [
+                str(self.ffmpeg.ffmpeg_path), "-y",
+                "-ss", "00:00:03.0", "-i", str(final_mp4),
+                "-vframes", "1", str(preview_png)
+            ]
+            subprocess.run(cmd_prev, capture_output=True)
+            if preview_png.exists():
+                self.send_photo(
+                    str(preview_png),
+                    caption=(
+                        f"📸 <b>PHASE 3: MOTION GRAPHIC PREVIEW (FRAME 00:03.000)</b>\n\n"
+                        f"• <b>Project:</b> {album.title if album else slug} — {track_name}\n"
+                        f"• <b>Resolution:</b> {w}x{h} ({ratio})\n"
+                        f"• <b>Engine:</b> Motion Director (Dynamic Camera + Waveform + HUD)"
+                    )
+                )
 
             # Step 5: Cloudflare Tunnel Packaging
             share_res = self.sharing.package_and_share(str(final_mp4))
@@ -522,55 +513,48 @@ class TelegramBotDaemon:
             )
             time.sleep(1.0)
 
-            # Step 3: Tesseract Project Creation
+            # Step 3: Motion Director Multi-Track Kinetic Montage Authoring
             out_dir = ROOT_DIR / "output" / slug
             out_dir.mkdir(parents=True, exist_ok=True)
-            tsrct_file = out_dir / f"{slug}_album_teaser_{aspect_ratio_code}.tsrct"
+            final_mp4 = out_dir / f"{slug}_album_teaser_{aspect_ratio_code}_final.mp4"
 
             w = 1080 if ratio == "9:16" else (1920 if ratio == "16:9" else 1080)
             h = 1920 if ratio == "9:16" else (1080 if ratio == "16:9" else 1080)
 
-            spec = VideoProjectSpec(
-                name=f"{album_name} - Album Teaser",
-                width=w,
-                height=h,
-                duration=30.0,
-                aspect_ratio=ratio,
-                cover_art_path=album.cover_art_path if album else None,
-            )
-            self.engine.create_project(spec, str(tsrct_file))
-
-            # ── Notification 3: Render Preview Frame & Send Photo ──
-            preview_png = out_dir / f"teaser_preview_{aspect_ratio_code}.png"
-            prev_res = self.engine.render_preview(str(tsrct_file), 0.0, str(preview_png))
-            if prev_res.success and preview_png.exists():
-                self.send_photo(
-                    str(preview_png),
-                    caption=(
-                        f"📸 <b>PHASE 3: TEASER RENDER PREVIEW (FRAME 00:00.000)</b>\n\n"
-                        f"• <b>Project:</b> {album_name} Album Teaser\n"
-                        f"• <b>Resolution:</b> {w}x{h} ({ratio})\n"
-                        f"• <b>Engine:</b> Tesseract 0.1.0 (Local GPU)"
-                    )
-                )
-
-            # Step 4: Export Raw Video & Mux Master Audio
             self.edit_message(
                 message_id,
                 f"🔥 <b>CREATING ALBUM TEASER: {album_name}</b>\n\n"
-                f"Progress: [{self.progress_bar(80)}] 80%\n"
-                f"• Exporting video montage via Tesseract...\n"
-                f"• Muxing master FLAC audio stream..."
+                f"Progress: [{self.progress_bar(70)}] 70%\n"
+                f"• Synthesizing dynamic camera movements across 5 tracks...\n"
+                f"• Generating real-time audio-reactive neon waveforms...\n"
+                f"• Compositing brutalist cyberpunk HUD metadata overlays..."
             )
-            raw_mp4 = out_dir / f"raw_teaser_{aspect_ratio_code}.mp4"
-            final_mp4 = out_dir / f"{slug}_album_teaser_{aspect_ratio_code}_final.mp4"
 
-            self.engine.export(str(tsrct_file), str(raw_mp4))
-            first_track = album.tracks[0] if album and album.tracks else None
-            if first_track and first_track.audio_path and os.path.exists(first_track.audio_path):
-                self.ffmpeg.mux_audio_video(str(raw_mp4), first_track.audio_path, str(final_mp4), shortest=True)
-            else:
-                final_mp4 = raw_mp4
+            res = self.motion.render_album_teaser(
+                slug=slug,
+                aspect_ratio=ratio,
+                total_duration=30.0,
+                output_path=str(final_mp4),
+            )
+
+            # ── Notification 3: Render Preview Frame & Send Photo ──
+            preview_png = out_dir / f"teaser_preview_{aspect_ratio_code}.png"
+            cmd_prev = [
+                str(self.ffmpeg.ffmpeg_path), "-y",
+                "-ss", "00:00:09.0", "-i", str(final_mp4),
+                "-vframes", "1", str(preview_png)
+            ]
+            subprocess.run(cmd_prev, capture_output=True)
+            if preview_png.exists():
+                self.send_photo(
+                    str(preview_png),
+                    caption=(
+                        f"📸 <b>PHASE 3: KINETIC TEASER PREVIEW (FRAME 00:09.000)</b>\n\n"
+                        f"• <b>Project:</b> {album_name} Multi-Track Teaser Montage\n"
+                        f"• <b>Resolution:</b> {w}x{h} ({ratio})\n"
+                        f"• <b>Features:</b> Dynamic Ken Burns, Audio Reactive Waveform & HUD"
+                    )
+                )
 
             # Step 5: Cloudflare Tunnel Packaging
             share_res = self.sharing.package_and_share(str(final_mp4))
