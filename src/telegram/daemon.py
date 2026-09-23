@@ -418,17 +418,20 @@ class TelegramBotDaemon:
             # Step 5: Cloudflare Tunnel Packaging
             share_res = self.sharing.package_and_share(str(final_mp4))
             cf_url = share_res.external_url or share_res.local_url or "https://preview.trycloudflare.com"
+            player_url = f"{cf_url.rsplit('/', 1)[0]}/" if "/" in cf_url else cf_url
 
-            # ── Notification 4: Deliver Native Video Directly to Telegram ──
+            # ── Notification 4: Deliver Direct Video via Cloudflare DNS & Telegram ──
             caption = (
                 f"🎬 <b>{track_name.upper()} — VIDEO MASTER</b>\n\n"
                 f"• <b>Album:</b> {album.title if album else slug}\n"
                 f"• <b>Format:</b> {ratio} | <b>Duration:</b> 15.0s\n"
-                f"• <b>Engine:</b> Tesseract 0.1.0 + Master FLAC Audio Mux\n"
-                f"• <b>Status:</b> Rendered & Delivered!"
+                f"• <b>Engine:</b> Tesseract 0.1.0 + Master FLAC Audio Mux\n\n"
+                f"🔗 <b>Direct Video (Cloudflare DNS):</b>\n{cf_url}\n\n"
+                f"🌐 <b>Web Player:</b>\n{player_url}"
             )
             buttons = [
-                [{"text": "⚡ Stream via Cloudflare Tunnel", "url": cf_url}],
+                [{"text": "🎬 Direct Video Link (MP4)", "url": cf_url}],
+                [{"text": "🌐 Open Web Player", "url": player_url}],
                 [{"text": "🚀 Finalize 4K Master", "callback_data": f"finalize:{slug}:{track_num}"}],
                 [{"text": "🎵 Choose Another Track", "callback_data": f"album:{slug}"}, {"text": "🏠 Main Menu", "callback_data": "nav:home"}]
             ]
@@ -436,11 +439,16 @@ class TelegramBotDaemon:
 
             self.edit_message(
                 message_id,
-                f"🎉 <b>VIDEO DELIVERED TO CHAT!</b>\n\n"
-                f"• <b>Project:</b> {track_name}\n"
-                f"• <b>Cloudflare Stream:</b> {cf_url}\n"
-                f"• Check the video player delivered above in this chat!",
-                buttons=[[{"text": "🏠 Main Menu", "callback_data": "nav:home"}]]
+                f"🎉 <b>VIDEO DELIVERED VIA CLOUDFLARE DNS!</b>\n\n"
+                f"• <b>Project:</b> {track_name}\n\n"
+                f"🔗 <b>Direct Video Link (MP4):</b>\n{cf_url}\n\n"
+                f"🌐 <b>Web Video Player:</b>\n{player_url}\n\n"
+                f"• Byte-range streaming (HTTP 206) active for instant browser playback.",
+                buttons=[
+                    [{"text": "🎬 Direct Video Link (MP4)", "url": cf_url}],
+                    [{"text": "🌐 Open Web Player", "url": player_url}],
+                    [{"text": "🏠 Main Menu", "callback_data": "nav:home"}]
+                ]
             )
 
         except Exception as e:
@@ -559,17 +567,20 @@ class TelegramBotDaemon:
             # Step 5: Cloudflare Tunnel Packaging
             share_res = self.sharing.package_and_share(str(final_mp4))
             cf_url = share_res.external_url or share_res.local_url or "https://preview.trycloudflare.com"
+            player_url = f"{cf_url.rsplit('/', 1)[0]}/" if "/" in cf_url else cf_url
 
-            # ── Notification 4: Deliver Native Video Directly to Telegram ──
+            # ── Notification 4: Deliver Direct Video via Cloudflare DNS & Telegram ──
             caption = (
                 f"🎬 <b>{album_name.upper()} — ALBUM TEASER MASTER</b>\n\n"
                 f"• <b>Audio Track:</b> {first_track.title if first_track else 'Master Track'}\n"
                 f"• <b>Format:</b> {ratio} | <b>Duration:</b> 30.0s (Showcase)\n"
-                f"• <b>Engine:</b> Tesseract 0.1.0 + Master FLAC Audio Mux\n"
-                f"• <b>Status:</b> Rendered & Delivered!"
+                f"• <b>Engine:</b> Tesseract 0.1.0 + Master FLAC Audio Mux\n\n"
+                f"🔗 <b>Direct Video (Cloudflare DNS):</b>\n{cf_url}\n\n"
+                f"🌐 <b>Web Player:</b>\n{player_url}"
             )
             buttons = [
-                [{"text": "⚡ Stream via Cloudflare Tunnel", "url": cf_url}],
+                [{"text": "🎬 Direct Video Link (MP4)", "url": cf_url}],
+                [{"text": "🌐 Open Web Player", "url": player_url}],
                 [{"text": "🚀 Export Full 4K Teaser", "callback_data": f"finalize:{slug}:teaser"}],
                 [{"text": "🎵 Browse Individual Tracks", "callback_data": f"album:{slug}"}, {"text": "🏠 Main Menu", "callback_data": "nav:home"}]
             ]
@@ -577,11 +588,16 @@ class TelegramBotDaemon:
 
             self.edit_message(
                 message_id,
-                f"🎉 <b>ALBUM TEASER DELIVERED TO CHAT!</b>\n\n"
-                f"• <b>Album:</b> {album_name}\n"
-                f"• <b>Cloudflare Stream:</b> {cf_url}\n"
-                f"• Check the video player delivered above in this chat!",
-                buttons=[[{"text": "🏠 Main Menu", "callback_data": "nav:home"}]]
+                f"🎉 <b>ALBUM TEASER DELIVERED VIA CLOUDFLARE DNS!</b>\n\n"
+                f"• <b>Album:</b> {album_name}\n\n"
+                f"🔗 <b>Direct Video Link (MP4):</b>\n{cf_url}\n\n"
+                f"🌐 <b>Web Video Player:</b>\n{player_url}\n\n"
+                f"• Byte-range streaming (HTTP 206) active for instant browser playback.",
+                buttons=[
+                    [{"text": "🎬 Direct Video Link (MP4)", "url": cf_url}],
+                    [{"text": "🌐 Open Web Player", "url": player_url}],
+                    [{"text": "🏠 Main Menu", "callback_data": "nav:home"}]
+                ]
             )
 
         except Exception as e:

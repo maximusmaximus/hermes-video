@@ -208,20 +208,25 @@ class TelegramGateway:
         cloudflare_url: str,
     ) -> Optional[int]:
         """Present Stage 2 Rough Cut / Video Review Gate with Cloudflare URL."""
+        player_url = f"{cloudflare_url.rsplit('/', 1)[0]}/" if "/" in cloudflare_url else cloudflare_url
         text = (
             f"👀 <b>VIDEO PREVIEW READY FOR REVIEW</b>\n\n"
             f"<b>Project:</b> {project_title}\n"
             f"<b>Track:</b> {track_title}\n"
             f"<b>Duration:</b> {duration:.1f}s\n\n"
-            f"Your video has been rendered locally with Tesseract and tunneled "
-            f"via Cloudflare for instant mobile playback."
+            f"🔗 <b>Direct Video Link (Cloudflare DNS):</b>\n{cloudflare_url}\n\n"
+            f"🌐 <b>Web Video Player:</b>\n{player_url}\n\n"
+            f"Tap the link above to stream or download directly."
         )
 
         buttons = [
             [
                 TelegramButton(
-                    text="⚡ Stream Video (Cloudflare)", url=cloudflare_url
-                )
+                    text="🎬 Direct Video Link (MP4)", url=cloudflare_url
+                ),
+                TelegramButton(
+                    text="🌐 Web Player", url=player_url
+                ),
             ],
             [
                 TelegramButton(

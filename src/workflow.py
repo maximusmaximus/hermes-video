@@ -278,7 +278,9 @@ class HermesVideoWorkflow:
         print(f"\n🌐 Packaging deliverable via Cloudflare Tunnel (secure-share)...")
         share_res = self.sharing.package_and_share(str(final_mp4))
         cf_url = share_res.external_url or share_res.local_url or "https://preview.trycloudflare.com"
-        print(f"🚀 Cloudflare Stream Link: {cf_url}")
+        player_url = f"{cf_url.rsplit('/', 1)[0]}/" if "/" in cf_url else cf_url
+        print(f"🚀 Cloudflare Video Link: {cf_url}")
+        print(f"🌐 Cloudflare Web Player: {player_url}")
 
         # 9. Deliver Playable Video Directly to Telegram Chat
         if str(final_mp4).endswith(".mp4") and os.path.exists(final_mp4):
@@ -287,11 +289,13 @@ class HermesVideoWorkflow:
                 f"🎬 <b>{track.title.upper()} — VIDEO MASTER</b>\n\n"
                 f"• <b>Album:</b> {track.album_title}\n"
                 f"• <b>Format:</b> {aspect_ratio} | <b>Duration:</b> {duration:.1f}s\n"
-                f"• <b>Engine:</b> Tesseract 0.1.0 + Master FLAC Audio Mux\n"
-                f"• <b>Status:</b> Rendered & Delivered!"
+                f"• <b>Engine:</b> Tesseract 0.1.0 + Master FLAC Audio Mux\n\n"
+                f"🔗 <b>Direct Video (Cloudflare DNS):</b>\n{cf_url}\n\n"
+                f"🌐 <b>Web Player:</b>\n{player_url}"
             )
             buttons = [
-                [{"text": "⚡ Stream via Cloudflare Tunnel", "url": cf_url}],
+                [{"text": "🎬 Direct Video Link (MP4)", "url": cf_url}],
+                [{"text": "🌐 Open Web Player", "url": player_url}],
                 [{"text": "🚀 Finalize 4K Master", "callback_data": f"finalize:{track.album_slug}:{track.track_number}"}],
             ]
             self.telegram.send_video(str(final_mp4), caption=caption, buttons=buttons)
