@@ -12,6 +12,8 @@ import os
 import sys
 import time
 import json
+import subprocess
+import traceback
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import urllib.request
@@ -63,9 +65,30 @@ class TelegramBotDaemon:
         self.motion = MotionDirector()
         self.sharing = CloudflareShare()
 
+        # Enforce single active daemon to eliminate 409 Conflict
+        self._enforce_single_instance()
+
         # Thread pool for asynchronous rendering jobs so polling never freezes
         self.executor = ThreadPoolExecutor(max_workers=4)
         self.last_update_id = 0
+
+    def _enforce_single_instance(self):
+        """Terminate any older or orphaned daemon processes to avoid Telegram 409 conflict."""
+        current_pid = os.getpid()
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            f"Get-CimInstance Win32_Process -Filter \"Name like '%python%'\" | "
+            f"Where-Object {{ $_.CommandLine -like '*daemon.py*' -and $_.ProcessId -ne {current_pid} }} | "
+            f"ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force; 'Cleaned up older daemon PID ' + $_.ProcessId }}"
+        ]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if res.stdout.strip():
+                print(f"[PROCESS] {res.stdout.strip()}", flush=True)
+        except Exception:
+            pass
 
     def _call(self, method: str, payload: Optional[Dict[str, Any]] = None, timeout: int = 15) -> Optional[Dict[str, Any]]:
         url = f"{self.base_url}/{method}"
@@ -100,7 +123,9 @@ class TelegramBotDaemon:
         res = self._call("sendMessage", payload)
         return res.get("message_id") if isinstance(res, dict) else None
 
-    def edit_message(self, message_id: int, text: str, buttons: Optional[List[List[Dict[str, str]]]] = None, parse_mode: str = "HTML"):
+    def edit_message(self, message_id: Optional[int], text: str, buttons: Optional[List[List[Dict[str, str]]]] = None, parse_mode: str = "HTML"):
+        if not message_id:
+            return self.send_message(text, buttons, parse_mode)
         payload: Dict[str, Any] = {
             "chat_id": self.chat_id,
             "message_id": message_id,
@@ -109,7 +134,10 @@ class TelegramBotDaemon:
         }
         if buttons:
             payload["reply_markup"] = {"inline_keyboard": buttons}
-        self._call("editMessageText", payload)
+        res = self._call("editMessageText", payload)
+        if not res:
+            return self.send_message(text, buttons, parse_mode)
+        return message_id
 
     def send_photo(self, photo_path: str, caption: str = "", parse_mode: str = "HTML") -> Optional[int]:
         """Send rendered visual frame directly into Telegram chat."""
@@ -201,7 +229,7 @@ class TelegramBotDaemon:
         else:
             self.send_message(text, buttons)
 
-    def show_all_albums(self, page: int, message_id: int):
+    def show_all_albums(self, page: int, message_id: Optional[int] = None):
         """Paginated list of all 19 albums."""
         releases = self.catalog.list_releases()
         per_page = 6
@@ -236,7 +264,7 @@ class TelegramBotDaemon:
 
         self.edit_message(message_id, text, buttons)
 
-    def show_album_tracks(self, slug: str, message_id: int):
+    def show_album_tracks(self, slug: str, message_id: Optional[int] = None):
         """Display track list for selected album."""
         album = self.catalog.get_release(slug)
         if not album:
@@ -264,7 +292,7 @@ class TelegramBotDaemon:
 
         self.edit_message(message_id, text, buttons)
 
-    def show_format_selector(self, slug: str, track_num: int, message_id: int):
+    def show_format_selector(self, slug: str, track_num: int, message_id: Optional[int] = None):
         """Display aspect ratio and style options for single track."""
         album = self.catalog.get_release(slug)
         track = album.tracks[track_num - 1] if album and album.tracks and len(album.tracks) >= track_num else None
@@ -287,7 +315,7 @@ class TelegramBotDaemon:
 
         self.edit_message(message_id, text, buttons)
 
-    def show_teaser_format_selector(self, slug: str, message_id: int):
+    def show_teaser_format_selector(self, slug: str, message_id: Optional[int] = None):
         """Display format selector for Album Teasers."""
         album = self.catalog.get_release(slug)
         album_name = album.title if album else slug.replace("-", " ").title()
@@ -562,6 +590,7 @@ class TelegramBotDaemon:
             player_url = f"{cf_url.rsplit('/', 1)[0]}/" if "/" in cf_url else cf_url
 
             # ── Notification 4: Deliver Direct Video via Cloudflare DNS & Telegram ──
+            first_track = album.tracks[0] if album and album.tracks else None
             caption = (
                 f"🎬 <b>{album_name.upper()} — ALBUM TEASER MASTER</b>\n\n"
                 f"• <b>Audio Track:</b> {first_track.title if first_track else 'Master Track'}\n"
@@ -674,6 +703,48 @@ class TelegramBotDaemon:
                 buttons=[[{"text": "🏠 Main Menu", "callback_data": "nav:home"}]]
             )
 
+    def handle_message(self, msg: Dict[str, Any]):
+        """Handle incoming text messages intelligently."""
+        text = msg.get("text", "").strip()
+        from_user = msg.get("from", {}).get("username") or msg.get("from", {}).get("first_name", "user")
+        print(f"[MSG] Received from @{from_user}: '{text}'", flush=True)
+
+        if not text:
+            return
+
+        text_lower = text.lower()
+        if text_lower in ["/start", "/albums", "/menu", "/help", "hi", "hello", "hey", "menu", "start", "home", "albums"]:
+            self.show_home_menu()
+            return
+
+        # Check for album keywords
+        releases = self.catalog.list_releases()
+        matched_album = None
+        for rel in releases:
+            if rel.slug.lower() in text_lower or rel.title.lower() in text_lower:
+                matched_album = rel
+                break
+
+        if matched_album:
+            if "teaser" in text_lower or "video" in text_lower or "render" in text_lower:
+                self.show_teaser_format_selector(matched_album.slug)
+            else:
+                self.show_album_tracks(matched_album.slug)
+            return
+
+        # Fallback response with helpful buttons
+        reply_text = (
+            f"⚡ <b>HERMES VIDEO AGENT ONLINE</b>\n\n"
+            f"Received: <i>\"{text}\"</i>\n\n"
+            f"Tap an option below to browse releases or create a video teaser:"
+        )
+        buttons = [
+            [{"text": "🔥 Abyss Throttle Teaser (9:16)", "callback_data": "run_teaser:abyss-throttle:9_16"}],
+            [{"text": "📁 Browse All Releases", "callback_data": "nav:all_albums:0"}],
+            [{"text": "🏠 Main Menu", "callback_data": "nav:home"}]
+        ]
+        self.send_message(reply_text, buttons)
+
     def run_once(self):
         """Single poll pass with long polling."""
         url = f"{self.base_url}/getUpdates?offset={self.last_update_id + 1}&timeout=10"
@@ -685,13 +756,19 @@ class TelegramBotDaemon:
                     for update in data["result"]:
                         self.last_update_id = max(self.last_update_id, update["update_id"])
                         if "callback_query" in update:
+                            print(f"[CALLBACK] {update['callback_query'].get('data')}", flush=True)
                             self.handle_callback_query(update["callback_query"])
                         elif "message" in update:
-                            text = update["message"].get("text", "")
-                            if text.startswith("/start") or text.startswith("/albums"):
-                                self.show_home_menu()
-        except Exception:
-            pass
+                            self.handle_message(update["message"])
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
+                print("[WARN] 409 Conflict: Another polling connection is active. Waiting 2s...", flush=True)
+                time.sleep(2)
+            else:
+                print(f"[ERROR] HTTPError in polling: {e}", flush=True)
+        except Exception as e:
+            print(f"[ERROR] Exception in polling: {e}", flush=True)
+            time.sleep(1)
 
     def run_forever(self):
         print(f"⚡ Hermes Video Multi-Threaded Daemon started! Listening on @Planetaryvideo_bot...", flush=True)
