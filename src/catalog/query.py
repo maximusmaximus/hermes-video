@@ -58,6 +58,35 @@ class MusicCatalogQuery:
         self.artwork_dir = self.root_dir / "artwork"
         self.waveform_dir = self.root_dir / "waveforms"
 
+    def _find_cover_art(self, slug: str, item_dir: Optional[Path] = None) -> Optional[str]:
+        """Search all possible directories for album artwork."""
+        candidates = [
+            self.artwork_dir / "albums" / slug / "album_cover.png",
+            self.artwork_dir / "albums" / slug / "cover.png",
+            self.artwork_dir / "albums" / slug / "cover.jpg",
+            self.releases_dir / slug / "cover.png",
+            self.releases_dir / slug / "cover.jpg",
+            self.releases_dir / slug / "album_cover.png",
+            self.albums_dir / slug / "cover.png",
+            self.albums_dir / slug / "cover.jpg",
+            self.albums_dir / slug / "album_cover.png",
+        ]
+        if item_dir:
+            candidates.extend([
+                item_dir / "cover.png",
+                item_dir / "cover.jpg",
+                item_dir / "album_cover.png",
+                item_dir / "artwork.png",
+            ])
+            covers_dir = item_dir / "covers"
+            if covers_dir.exists():
+                candidates.extend(list(covers_dir.glob("*.png")) + list(covers_dir.glob("*.jpg")))
+
+        for c in candidates:
+            if c.exists():
+                return str(c)
+        return None
+
     def list_releases(self) -> List[ReleaseItem]:
         """Scan releases directory and return all discovered albums."""
         releases = []
@@ -84,17 +113,9 @@ class MusicCatalogQuery:
                     except Exception:
                         pass
 
-                # Look for cover artwork if not explicitly specified
+                # Look for cover artwork across catalog artwork folders
                 if not cover_art:
-                    covers_dir = item / "covers"
-                    if covers_dir.exists():
-                        for img in covers_dir.glob("*.png"):
-                            cover_art = str(img)
-                            break
-                        if not cover_art:
-                            for img in covers_dir.glob("*.jpg"):
-                                cover_art = str(img)
-                                break
+                    cover_art = self._find_cover_art(item.name, item)
 
                 # Count audio tracks
                 flacs = list(item.glob("*.flac"))
@@ -139,11 +160,7 @@ class MusicCatalogQuery:
                 pass
 
         if not cover_art:
-            covers_dir = release_dir / "covers"
-            if covers_dir.exists():
-                for img in list(covers_dir.glob("*.png")) + list(covers_dir.glob("*.jpg")):
-                    cover_art = str(img)
-                    break
+            cover_art = self._find_cover_art(slug, release_dir)
 
         # Discover tracks
         tracks = []

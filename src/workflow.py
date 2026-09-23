@@ -233,6 +233,7 @@ class HermesVideoWorkflow:
             duration=duration,
             aspect_ratio=aspect_ratio,
             audio_track_path=track.audio_path,
+            cover_art_path=track.cover_art_path,
         )
 
         print(f"\n⚙️ Authoring local Tesseract project: {project_file.name}...")

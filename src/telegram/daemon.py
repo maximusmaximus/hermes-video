@@ -375,13 +375,20 @@ class TelegramBotDaemon:
             w = 1920 if ratio == "16:9" else (1080 if ratio == "9:16" else 1080)
             h = 1080 if ratio == "16:9" else (1920 if ratio == "9:16" else 1080)
 
+            cover_art = None
+            if track and track.cover_art_path:
+                cover_art = track.cover_art_path
+            elif album and album.cover_art_path:
+                cover_art = album.cover_art_path
+
             spec = VideoProjectSpec(
                 name=f"{album.title if album else slug} - {track_name}",
                 width=w,
                 height=h,
                 duration=15.0,
                 aspect_ratio=ratio,
-                audio_track_path=track.audio_path if track else None
+                audio_track_path=track.audio_path if track else None,
+                cover_art_path=cover_art,
             )
             self.engine.create_project(spec, str(tsrct_file))
 
@@ -529,6 +536,7 @@ class TelegramBotDaemon:
                 height=h,
                 duration=30.0,
                 aspect_ratio=ratio,
+                cover_art_path=album.cover_art_path if album else None,
             )
             self.engine.create_project(spec, str(tsrct_file))
 

@@ -19,6 +19,7 @@ class VideoProjectSpec:
     duration: float = 15.0
     aspect_ratio: str = "16:9"
     audio_track_path: Optional[str] = None
+    cover_art_path: Optional[str] = None
     assets: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
