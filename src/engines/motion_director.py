@@ -13,10 +13,24 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from PIL import Image, ImageDraw, ImageFont
 
 from src.catalog.query import MusicCatalogQuery, ReleaseItem, TrackItem
+from src.templates.manager import ProductionBrief
+
+
+def _hex_to_rgb(hex_str: str) -> Tuple[int, int, int]:
+    """Convert hex string (e.g. #00f0ff or 0x00f0ff) to RGB tuple."""
+    clean = hex_str.strip().lstrip("#").lower()
+    if clean.startswith("0x"):
+        clean = clean[2:]
+    if len(clean) == 6:
+        try:
+            return (int(clean[0:2], 16), int(clean[2:4], 16), int(clean[4:6], 16))
+        except ValueError:
+            pass
+    return (0, 240, 255)
 
 
 class MotionDirector:
@@ -65,13 +79,16 @@ class MotionDirector:
         track_title: str,
         metadata_line: str,
         catalog_code: str = "VØID-019",
+        primary_color: str = "#00f0ff",
+        accent_color: str = "#7000ff",
     ) -> str:
         """Render a cyberpunk / brutalist HUD graphic overlay with transparent background."""
         img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
 
-        cyan = (0, 240, 255)
-        cyan_dim = (0, 240, 255, 180)
+        r, g, b = _hex_to_rgb(primary_color)
+        primary_rgb = (r, g, b)
+        primary_dim = (r, g, b, 180)
         white = (255, 255, 255)
         text_dim = (180, 200, 220)
         dark_box = (10, 12, 18, 220)
@@ -79,36 +96,36 @@ class MotionDirector:
         # ── Top Header HUD ──
         header_y1 = 60
         header_y2 = 135
-        draw.rectangle([40, header_y1, width - 40, header_y2], fill=dark_box, outline=cyan_dim, width=2)
-        draw.text((60, header_y1 + 12), f"// VØIDRIDE RECORDS // {catalog_code}", fill=cyan, font=self.font_mono)
+        draw.rectangle([40, header_y1, width - 40, header_y2], fill=dark_box, outline=primary_dim, width=2)
+        draw.text((60, header_y1 + 12), f"// VØIDRIDE RECORDS // {catalog_code}", fill=primary_rgb, font=self.font_mono)
         draw.text((60, header_y1 + 38), f"{album_title.upper()} — OFFICIAL ALBUM TEASER", fill=white, font=self.font_subtitle)
 
         # ── Lower Third Track Badge ──
         badge_y1 = height - 340
         badge_y2 = height - 160
-        draw.rectangle([40, badge_y1, width - 40, badge_y2], fill=dark_box, outline=cyan_dim, width=2)
+        draw.rectangle([40, badge_y1, width - 40, badge_y2], fill=dark_box, outline=primary_dim, width=2)
 
         # Accent tab
-        draw.rectangle([40, badge_y1, 48, badge_y2], fill=cyan)
+        draw.rectangle([40, badge_y1, 48, badge_y2], fill=primary_rgb)
 
-        draw.text((65, badge_y1 + 15), f"TRACK {track_number:02d} // {total_tracks:02d}", fill=cyan, font=self.font_mono)
+        draw.text((65, badge_y1 + 15), f"TRACK {track_number:02d} // {total_tracks:02d}", fill=primary_rgb, font=self.font_mono)
         draw.text((65, badge_y1 + 45), track_title.upper(), fill=white, font=self.font_title)
         draw.text((65, badge_y1 + 115), metadata_line.upper(), fill=text_dim, font=self.font_mono_small)
 
         # ── Corner Framing Reticles ──
         b_len = 50
         # Top-Left
-        draw.line([(30, 50), (30 + b_len, 50)], fill=cyan, width=3)
-        draw.line([(30, 50), (30, 50 + b_len)], fill=cyan, width=3)
+        draw.line([(30, 50), (30 + b_len, 50)], fill=primary_rgb, width=3)
+        draw.line([(30, 50), (30, 50 + b_len)], fill=primary_rgb, width=3)
         # Top-Right
-        draw.line([(width - 30, 50), (width - 30 - b_len, 50)], fill=cyan, width=3)
-        draw.line([(width - 30, 50), (width - 30, 50 + b_len)], fill=cyan, width=3)
+        draw.line([(width - 30, 50), (width - 30 - b_len, 50)], fill=primary_rgb, width=3)
+        draw.line([(width - 30, 50), (width - 30, 50 + b_len)], fill=primary_rgb, width=3)
         # Bottom-Left
-        draw.line([(30, height - 50), (30 + b_len, height - 50)], fill=cyan, width=3)
-        draw.line([(30, height - 50), (30, height - 50 - b_len)], fill=cyan, width=3)
+        draw.line([(30, height - 50), (30 + b_len, height - 50)], fill=primary_rgb, width=3)
+        draw.line([(30, height - 50), (30, height - 50 - b_len)], fill=primary_rgb, width=3)
         # Bottom-Right
-        draw.line([(width - 30, height - 50), (width - 30 - b_len, height - 50)], fill=cyan, width=3)
-        draw.line([(width - 30, height - 50), (width - 30, height - 50 - b_len)], fill=cyan, width=3)
+        draw.line([(width - 30, height - 50), (width - 30 - b_len, height - 50)], fill=primary_rgb, width=3)
+        draw.line([(width - 30, height - 50), (width - 30, height - 50 - b_len)], fill=primary_rgb, width=3)
 
         out_path = Path(output_png)
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -160,6 +177,7 @@ class MotionDirector:
         width: int = 1080,
         height: int = 1920,
         motion_type: str = "zoom_in",
+        waveform_color: str = "0x00f0ff",
     ) -> bool:
         """
         Render a single motion clip with dynamic camera movement,
@@ -171,25 +189,30 @@ class MotionDirector:
         frames = int(duration * 30)
 
         # Dynamic motion formulas for zoompan
-        if motion_type == "zoom_in":
+        if motion_type == "zoom_in" or motion_type == "push_in":
             motion_filter = f"zoompan=z='min(zoom+0.0012,1.22)':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={width}x{height}:fps=30"
         elif motion_type == "pan_down":
             motion_filter = f"zoompan=z=1.15:d={frames}:x='iw/2-(iw/zoom/2)':y='ih*0.05+on*(ih*0.05)/{frames}':s={width}x{height}:fps=30"
         elif motion_type == "zoom_out":
             motion_filter = f"zoompan=z='if(lte(on,-1),1.22,max(1.001,1.22-on*0.0012))':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={width}x{height}:fps=30"
-        elif motion_type == "pan_right":
+        elif motion_type in ("pan_right", "pan_drift"):
             motion_filter = f"zoompan=z=1.15:d={frames}:x='iw*0.05+on*(iw*0.05)/{frames}':y='ih/2-(ih/zoom/2)':s={width}x{height}:fps=30"
+        elif motion_type == "ambient_float":
+            motion_filter = f"zoompan=z='1.08+0.04*sin(on*0.05)':d={frames}:x='iw/2-(iw/zoom/2)+15*sin(on*0.03)':y='ih/2-(ih/zoom/2)+10*cos(on*0.03)':s={width}x{height}:fps=30"
         else:  # punch-in climax
             motion_filter = f"zoompan=z='min(zoom+0.0018,1.28)':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={width}x{height}:fps=30"
 
-        # Waveform placement: right above the lower badge (y=height-470)
+        # Format waveform color for FFmpeg showwaves (needs 0xRRGGBB)
+        wave_color_clean = waveform_color.replace("#", "0x") if waveform_color.startswith("#") else waveform_color
+
+        # Waveform placement: right above the lower badge (y=height-480)
         wave_w = width - 80
         wave_h = 240
         wave_y = height - 480
 
         filter_str = (
             f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},{motion_filter}[bg];"
-            f"[1:a]showwaves=s={wave_w}x{wave_h}:mode=cline:colors=0x00f0ff:scale=cbrt,colorkey=0x000000:0.1:0.1[waves];"
+            f"[1:a]showwaves=s={wave_w}x{wave_h}:mode=cline:colors={wave_color_clean}:scale=cbrt,colorkey=0x000000:0.1:0.1[waves];"
             f"[bg][waves]overlay=40:{wave_y}[bg_waves];"
             f"[bg_waves][2:v]overlay=0:0[v]"
         )
@@ -221,11 +244,12 @@ class MotionDirector:
         aspect_ratio: str = "9:16",
         total_duration: float = 30.0,
         output_path: Optional[str] = None,
+        brief: Optional[ProductionBrief] = None,
     ) -> Optional[Path]:
         """
         Build and render a full multi-track kinetic montage album teaser:
         - Cycles through 5 master tracks with their distinct individual cover art
-        - Alternates 5 camera motions (zoom-in, pan-down, zoom-out, pan-right, climax push-in)
+        - Alternates camera motions according to style brief
         - Synchronizes audio hooks and real-time audio-reactive neon waveforms
         - Seamlessly concatenates into a single 30.0-second video master
         """
@@ -247,18 +271,35 @@ class MotionDirector:
             return None
 
         clip_duration = total_duration / count
-        motion_types = ["zoom_in", "pan_down", "zoom_out", "pan_right", "climax"]
+
+        # Extract styling from brief
+        primary_color = brief.primary_color if brief else "#00f0ff"
+        accent_color = brief.accent_color if brief else "#7000ff"
+        waveform_color = brief.waveform_hex if brief else "0x00f0ff"
+
+        if brief and brief.camera_motion == "ambient_float":
+            motion_types = ["ambient_float", "pan_drift", "ambient_float", "zoom_out", "pan_drift"]
+        elif brief and brief.camera_motion == "punch_climax":
+            motion_types = ["climax", "climax", "pan_down", "zoom_in", "climax"]
+        elif brief and brief.camera_motion == "pan_drift":
+            motion_types = ["pan_right", "pan_down", "pan_right", "pan_down", "climax"]
+        else:
+            motion_types = ["zoom_in", "pan_down", "zoom_out", "pan_right", "climax"]
+
+        subtitles = (
+            brief.subtitles
+            if (brief and brief.subtitles and len(brief.subtitles) >= count)
+            else [
+                "140 BPM // D# MINOR // SUB-BASS TRANSIENT LOCK",
+                "144 BPM // HADAL HIGH-PRESSURE SYNTH WALL",
+                "140 BPM // ACOUSTIC SIGNATURE DETECTED",
+                "142 BPM // SUBMERSIBLE SENSOR LOCK",
+                "145 BPM // STRUCTURAL CRUSH // OUT NOW ON VØIDRIDE",
+            ]
+        )
 
         temp_dir = Path(tempfile.mkdtemp(prefix=f"teaser_{slug}_"))
         segment_files = []
-
-        subtitles = [
-            "140 BPM // D# MINOR // SUB-BASS TRANSIENT LOCK",
-            "144 BPM // HADAL HIGH-PRESSURE SYNTH WALL",
-            "140 BPM // ACOUSTIC SIGNATURE DETECTED",
-            "142 BPM // SUBMERSIBLE SENSOR LOCK",
-            "145 BPM // STRUCTURAL CRUSH // OUT NOW ON VØIDRIDE",
-        ]
 
         try:
             for idx, track in enumerate(numbered_tracks, 1):
@@ -287,9 +328,11 @@ class MotionDirector:
                     track_title=clean_title,
                     metadata_line=meta_line,
                     catalog_code="VØID-019",
+                    primary_color=primary_color,
+                    accent_color=accent_color,
                 )
 
-                # 3. Render 6.0s kinetic motion clip with reactive waveform
+                # 3. Render kinetic motion clip with reactive waveform
                 clip_out = temp_dir / f"clip_{idx}.mp4"
                 motion = motion_types[(idx - 1) % len(motion_types)]
                 audio_start = 15.0  # drop hook start point
@@ -304,6 +347,7 @@ class MotionDirector:
                     width=w,
                     height=h,
                     motion_type=motion,
+                    waveform_color=waveform_color,
                 )
 
                 if success and clip_out.exists():
@@ -357,6 +401,7 @@ class MotionDirector:
         aspect_ratio: str = "9:16",
         duration: float = 15.0,
         output_path: Optional[str] = None,
+        brief: Optional[ProductionBrief] = None,
     ) -> Optional[Path]:
         """
         Build and render a motion visualizer for an individual track:
@@ -400,10 +445,19 @@ class MotionDirector:
             final_output = Path(output_path)
             final_output.parent.mkdir(parents=True, exist_ok=True)
 
+        primary_color = brief.primary_color if brief else "#00f0ff"
+        accent_color = brief.accent_color if brief else "#7000ff"
+        waveform_color = brief.waveform_hex if brief else "0x00f0ff"
+        motion_type = brief.camera_motion if brief else "zoom_in"
+        meta_line = (
+            brief.subtitles[0]
+            if (brief and brief.subtitles)
+            else f"{track.bpm or 140} BPM // {track.key or 'D# MINOR'} // SUB-BASS TRANSIENT LOCK"
+        )
+
         temp_dir = Path(tempfile.mkdtemp(prefix=f"vis_{slug}_"))
         try:
             hud_png = temp_dir / "hud.png"
-            meta_line = f"{track.bpm or 140} BPM // {track.key or 'D# MINOR'} // SUB-BASS TRANSIENT LOCK"
             self.create_hud_overlay(
                 output_png=str(hud_png),
                 width=w,
@@ -414,6 +468,8 @@ class MotionDirector:
                 track_title=clean_title,
                 metadata_line=meta_line,
                 catalog_code="VØID-019",
+                primary_color=primary_color,
+                accent_color=accent_color,
             )
 
             success = self.render_motion_clip(
@@ -425,7 +481,8 @@ class MotionDirector:
                 audio_start=15.0,
                 width=w,
                 height=h,
-                motion_type="zoom_in",
+                motion_type=motion_type,
+                waveform_color=waveform_color,
             )
             if success and final_output.exists():
                 return final_output

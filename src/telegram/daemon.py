@@ -43,6 +43,13 @@ from src.engines.tesseract import TesseractEngine
 from src.engines.ffmpeg_adapter import FFmpegAdapter
 from src.engines.motion_director import MotionDirector
 from src.sharing.cloudflare import CloudflareShare
+from src.templates.manager import TemplateManager, ProductionBrief, BUILTIN_TEMPLATES
+from src.storyboard.prompt_upscaler import (
+    PromptUpscaler,
+    COLOR_PALETTES,
+    CAMERA_MOTIONS,
+    TYPOGRAPHY_STYLES,
+)
 
 
 class TelegramBotDaemon:
@@ -64,6 +71,12 @@ class TelegramBotDaemon:
         self.ffmpeg = FFmpegAdapter()
         self.motion = MotionDirector()
         self.sharing = CloudflareShare()
+        self.template_manager = TemplateManager()
+        self.upscaler = PromptUpscaler(budget_ledger=self.budget)
+
+        # Active state tracking for prompt injections and live brief tweaks
+        self.user_states: Dict[str, Dict[str, Any]] = {}
+        self.active_briefs: Dict[str, ProductionBrief] = {}
 
         # Enforce single active daemon to eliminate 409 Conflict
         self._enforce_single_instance()
@@ -307,9 +320,9 @@ class TelegramBotDaemon:
         )
 
         buttons = [
-            [{"text": "🖥️ Landscape 16:9 (YouTube / 4K Master)", "callback_data": f"render:{slug}:{track_num}:16_9"}],
-            [{"text": "📱 Vertical 9:16 (TikTok / IG Reels / Shorts)", "callback_data": f"render:{slug}:{track_num}:9_16"}],
-            [{"text": "🔲 Square 1:1 (Instagram Feed / Teaser)", "callback_data": f"render:{slug}:{track_num}:1_1"}],
+            [{"text": "🖥️ Landscape 16:9 (YouTube / 4K Master)", "callback_data": f"pmenu:{slug}:16_9:{track_num}"}],
+            [{"text": "📱 Vertical 9:16 (TikTok / IG Reels / Shorts)", "callback_data": f"pmenu:{slug}:9_16:{track_num}"}],
+            [{"text": "🔲 Square 1:1 (Instagram Feed / Teaser)", "callback_data": f"pmenu:{slug}:1_1:{track_num}"}],
             [{"text": "🔙 Back to Tracks", "callback_data": f"album:{slug}"}]
         ]
 
@@ -328,17 +341,395 @@ class TelegramBotDaemon:
         )
 
         buttons = [
-            [{"text": "📱 Vertical 9:16 (High-Impact Reels / TikTok)", "callback_data": f"run_teaser:{slug}:9_16"}],
-            [{"text": "🖥️ Landscape 16:9 (Full YouTube Showcase)", "callback_data": f"run_teaser:{slug}:16_9"}],
-            [{"text": "🔲 Square 1:1 (Feed Teaser)", "callback_data": f"run_teaser:{slug}:1_1"}],
+            [{"text": "📱 Vertical 9:16 (High-Impact Reels / TikTok)", "callback_data": f"pmenu:{slug}:9_16:0"}],
+            [{"text": "🖥️ Landscape 16:9 (Full YouTube Showcase)", "callback_data": f"pmenu:{slug}:16_9:0"}],
+            [{"text": "🔲 Square 1:1 (Feed Teaser)", "callback_data": f"pmenu:{slug}:1_1:0"}],
             [{"text": "🔙 Back to Tracks", "callback_data": f"album:{slug}"}]
         ]
 
         self.edit_message(message_id, text, buttons)
 
+    # ── Prompt Injection, Creative Brief & Template Studio Screens ──
+
+    def _get_active_brief(self, slug: str, ratio_code: str, track_num: int) -> ProductionBrief:
+        session_key = f"{slug}:{ratio_code}:{track_num}"
+        if session_key not in self.active_briefs:
+            album = self.catalog.get_release(slug)
+            album_name = album.title if album else slug.replace("-", " ").title()
+            track = (
+                album.tracks[track_num - 1]
+                if (album and track_num > 0 and len(album.tracks) >= track_num)
+                else None
+            )
+            base = self.template_manager.list_templates()[0]
+            self.active_briefs[session_key] = ProductionBrief(
+                id=f"brief_{slug}_{track_num}",
+                name=base.name,
+                theme=base.theme,
+                color_palette=base.color_palette,
+                primary_color=base.primary_color,
+                accent_color=base.accent_color,
+                camera_motion=base.camera_motion,
+                typography_style=base.typography_style,
+                waveform_style=base.waveform_style,
+                waveform_hex=base.waveform_hex,
+                subtitles=list(base.subtitles),
+                raw_prompt="Studio Default",
+                created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                is_built_in=False,
+            )
+        return self.active_briefs[session_key]
+
+    def show_production_menu(
+        self, slug: str, ratio_code: str, track_num: int = 0, message_id: Optional[int] = None
+    ):
+        """Interactive Studio Menu: inject prompt, load template, or pick preset before rendering."""
+        album = self.catalog.get_release(slug)
+        album_name = album.title if album else slug.replace("-", " ").title()
+        track = (
+            album.tracks[track_num - 1]
+            if (album and track_num > 0 and len(album.tracks) >= track_num)
+            else None
+        )
+        target_name = f"{album_name} — {track.title}" if track else f"{album_name} (Album Teaser)"
+        ratio_display = {"16_9": "16:9 Landscape", "9_16": "9:16 Vertical", "1_1": "1:1 Square"}.get(
+            ratio_code, ratio_code
+        )
+
+        text = (
+            f"🎬 <b>PRODUCTION STUDIO: {target_name.upper()}</b>\n\n"
+            f"• <b>Target:</b> {target_name}\n"
+            f"• <b>Format:</b> {ratio_display}\n"
+            f"• <b>Engine:</b> Motion Director (Dynamic Camera + Waveform + HUD)\n\n"
+            f"Choose how you want to direct this production:\n"
+            f"• ⚡ <b>Studio Default:</b> Fast 1-tap Cyberpunk render\n"
+            f"• ✍️ <b>Inject Creative Prompt:</b> Venice AI (deepseek-v4-flash) upscales your vision\n"
+            f"• 📂 <b>Load Style Template:</b> Apply saved or built-in style in 1 tap\n"
+            f"• 🎲 <b>Studio Presets:</b> Quick 4-aesthetic studio styles"
+        )
+
+        buttons = [
+            [
+                {
+                    "text": "⚡ Produce with Studio Default",
+                    "callback_data": f"launch_prod:{slug}:{ratio_code}:{track_num}:default",
+                }
+            ],
+            [
+                {
+                    "text": "✍️ Inject Creative Prompt",
+                    "callback_data": f"ask_p:{slug}:{ratio_code}:{track_num}",
+                }
+            ],
+            [
+                {
+                    "text": "📂 Load Saved Template",
+                    "callback_data": f"load_tpl:{slug}:{ratio_code}:{track_num}",
+                }
+            ],
+            [
+                {
+                    "text": "🎲 Studio Presets",
+                    "callback_data": f"presets:{slug}:{ratio_code}:{track_num}",
+                }
+            ],
+        ]
+        if track_num > 0:
+            buttons.append(
+                [{"text": "🔙 Back to Track Setup", "callback_data": f"track:{slug}:{track_num}"}]
+            )
+        else:
+            buttons.append([{"text": "🔙 Back to Teaser Setup", "callback_data": f"teaser:{slug}"}])
+
+        self.edit_message(message_id, text, buttons)
+
+    def ask_creative_prompt(
+        self, slug: str, ratio_code: str, track_num: int, message_id: Optional[int] = None
+    ):
+        """Prompt user to type a visual concept in chat for Venice AI upscaling."""
+        album = self.catalog.get_release(slug)
+        album_name = album.title if album else slug.replace("-", " ").title()
+
+        # Set user state for text handling
+        self.user_states[str(self.chat_id)] = {
+            "action": "awaiting_prompt",
+            "slug": slug,
+            "ratio": ratio_code,
+            "track_num": track_num,
+            "message_id": message_id,
+        }
+
+        text = (
+            f"✍️ <b>CREATIVE PROMPT INJECTION</b>\n\n"
+            f"• <b>Target:</b> {album_name}\n\n"
+            f"<b>Type your visual direction into this chat!</b> For example:\n"
+            f"• <i>\"Bioluminescent hadal trench with cyan searchlights and crushing sub-bass ripples\"</i>\n"
+            f"• <i>\"Toxic acid green biohazard factory with flashing strobe alarms and corrosive cuts\"</i>\n"
+            f"• <i>\"Emergency crimson alarm strobe with aggressive drop punches\"</i>\n"
+            f"• <i>\"Obsidian monochrome horizon with amber telemetry and slow zero-gravity drift\"</i>\n\n"
+            f"⚡ <i>Venice AI (deepseek-v4-flash) will upscale your concept into a 6-vector Production Brief with instant interactive customization buttons.</i>"
+        )
+
+        buttons = [
+            [
+                {
+                    "text": "⚡ Cancel & Use Default Style",
+                    "callback_data": f"launch_prod:{slug}:{ratio_code}:{track_num}:default",
+                }
+            ],
+            [
+                {
+                    "text": "🔙 Back to Studio Menu",
+                    "callback_data": f"pmenu:{slug}:{ratio_code}:{track_num}",
+                }
+            ],
+        ]
+
+        self.edit_message(message_id, text, buttons)
+
+    def show_proposed_brief(
+        self,
+        slug: str,
+        ratio_code: str,
+        track_num: int,
+        message_id: Optional[int] = None,
+        notice: str = "",
+    ):
+        """Display proposed production brief with interactive tweak & save buttons."""
+        brief = self._get_active_brief(slug, ratio_code, track_num)
+        album = self.catalog.get_release(slug)
+        album_name = album.title if album else slug.replace("-", " ").title()
+        ratio_display = {"16_9": "16:9", "9_16": "9:16", "1_1": "1:1"}.get(
+            ratio_code, ratio_code
+        )
+
+        notice_block = f"{notice}\n\n" if notice else ""
+        text = (
+            f"📋 <b>PROPOSED PRODUCTION BRIEF</b>\n\n"
+            f"{notice_block}"
+            f"• <b>Project:</b> {album_name} ({ratio_display})\n"
+            f"• <b>Style:</b> {brief.name}\n"
+            f"• <b>Theme:</b> <i>\"{brief.theme}\"</i>\n"
+            f"• <b>Palette:</b> {brief.color_palette.upper()} (<code>{brief.primary_color}</code> / <code>{brief.accent_color}</code>)\n"
+            f"• <b>Waveform:</b> {brief.waveform_style.upper()} (<code>{brief.waveform_hex}</code>)\n"
+            f"• <b>Camera Motion:</b> {CAMERA_MOTIONS.get(brief.camera_motion, brief.camera_motion)}\n"
+            f"• <b>HUD Typography:</b> {TYPOGRAPHY_STYLES.get(brief.typography_style, brief.typography_style)}\n\n"
+            f"<i>Review or customize any parameter below, save as a template, or launch production:</i>"
+        )
+
+        buttons = [
+            [
+                {
+                    "text": "🎨 Change Palette",
+                    "callback_data": f"pal_menu:{slug}:{ratio_code}:{track_num}",
+                },
+                {
+                    "text": "🎥 Change Motion",
+                    "callback_data": f"mot_menu:{slug}:{ratio_code}:{track_num}",
+                },
+            ],
+            [
+                {
+                    "text": "💾 Save as Template",
+                    "callback_data": f"save_tpl:{slug}:{ratio_code}:{track_num}",
+                },
+                {
+                    "text": "📂 Load Template",
+                    "callback_data": f"load_tpl:{slug}:{ratio_code}:{track_num}",
+                },
+            ],
+            [
+                {
+                    "text": "🚀 LAUNCH PRODUCTION",
+                    "callback_data": f"launch_prod:{slug}:{ratio_code}:{track_num}:active",
+                }
+            ],
+            [
+                {
+                    "text": "✍️ Inject New Prompt",
+                    "callback_data": f"ask_p:{slug}:{ratio_code}:{track_num}",
+                },
+                {
+                    "text": "🔙 Studio Menu",
+                    "callback_data": f"pmenu:{slug}:{ratio_code}:{track_num}",
+                },
+            ],
+        ]
+
+        self.edit_message(message_id, text, buttons)
+
+    def show_palette_selector(
+        self, slug: str, ratio_code: str, track_num: int, message_id: int
+    ):
+        """Palette picker screen."""
+        text = (
+            f"🎨 <b>SELECT COLOR PALETTE</b>\n\n"
+            f"Pick a studio color palette for the HUD overlays and audio waveform:"
+        )
+        buttons = [
+            [
+                {
+                    "text": "🔵 Cyberpunk Cyan & Violet",
+                    "callback_data": f"set_pal:{slug}:{ratio_code}:{track_num}:cyan_purple",
+                }
+            ],
+            [
+                {
+                    "text": "🟢 Toxic Acid Green",
+                    "callback_data": f"set_pal:{slug}:{ratio_code}:{track_num}:acid_green",
+                }
+            ],
+            [
+                {
+                    "text": "🔴 Crimson Emergency Breach",
+                    "callback_data": f"set_pal:{slug}:{ratio_code}:{track_num}:crimson_red",
+                }
+            ],
+            [
+                {
+                    "text": "🟡 Obsidian & Amber Gold",
+                    "callback_data": f"set_pal:{slug}:{ratio_code}:{track_num}:monochrome_gold",
+                }
+            ],
+            [
+                {
+                    "text": "🔙 Back to Brief",
+                    "callback_data": f"show_b:{slug}:{ratio_code}:{track_num}",
+                }
+            ],
+        ]
+        self.edit_message(message_id, text, buttons)
+
+    def show_motion_selector(
+        self, slug: str, ratio_code: str, track_num: int, message_id: int
+    ):
+        """Camera motion picker screen."""
+        text = (
+            f"🎥 <b>SELECT CAMERA MOTION</b>\n\n"
+            f"Pick the dynamic camera motion curve for the artwork:"
+        )
+        buttons = [
+            [
+                {
+                    "text": "🎯 Kinetic Push-In (Forward Tension)",
+                    "callback_data": f"set_mot:{slug}:{ratio_code}:{track_num}:push_in",
+                }
+            ],
+            [
+                {
+                    "text": "🌊 Lateral Pan Drift (Atmospheric)",
+                    "callback_data": f"set_mot:{slug}:{ratio_code}:{track_num}:pan_drift",
+                }
+            ],
+            [
+                {
+                    "text": "💥 Climax Zoom Punch (Drop Impact)",
+                    "callback_data": f"set_mot:{slug}:{ratio_code}:{track_num}:punch_climax",
+                }
+            ],
+            [
+                {
+                    "text": "🌌 Ambient Float (Zero-G Hypnotic)",
+                    "callback_data": f"set_mot:{slug}:{ratio_code}:{track_num}:ambient_float",
+                }
+            ],
+            [
+                {
+                    "text": "🔭 Wide Pull-Back (Scale Reveal)",
+                    "callback_data": f"set_mot:{slug}:{ratio_code}:{track_num}:zoom_out",
+                }
+            ],
+            [
+                {
+                    "text": "🔙 Back to Brief",
+                    "callback_data": f"show_b:{slug}:{ratio_code}:{track_num}",
+                }
+            ],
+        ]
+        self.edit_message(message_id, text, buttons)
+
+    def show_template_picker(
+        self, slug: str, ratio_code: str, track_num: int, message_id: int
+    ):
+        """List all available templates (built-in and user-saved)."""
+        templates = self.template_manager.list_templates()
+        text = (
+            f"📂 <b>SAVED STYLE TEMPLATES ({len(templates)} Available)</b>\n\n"
+            f"Tap any template below to apply its complete 6-vector brief with 1 tap:"
+        )
+        buttons = []
+        for t in templates:
+            prefix = "⭐" if t.is_built_in else "💾"
+            buttons.append(
+                [
+                    {
+                        "text": f"{prefix} {t.name}",
+                        "callback_data": f"apply_tpl:{slug}:{ratio_code}:{track_num}:{t.id}",
+                    }
+                ]
+            )
+        buttons.append(
+            [
+                {
+                    "text": "🔙 Back to Brief",
+                    "callback_data": f"show_b:{slug}:{ratio_code}:{track_num}",
+                }
+            ]
+        )
+        self.edit_message(message_id, text, buttons)
+
+    def show_presets_picker(
+        self, slug: str, ratio_code: str, track_num: int, message_id: int
+    ):
+        """Quick 4-aesthetic studio presets picker."""
+        text = (
+            f"🎲 <b>STUDIO STYLE PRESETS</b>\n\n"
+            f"Select one of the signature VØIDRIDE studio aesthetics:"
+        )
+        buttons = [
+            [
+                {
+                    "text": "⭐ Cyberpunk Deep Sea",
+                    "callback_data": f"apply_tpl:{slug}:{ratio_code}:{track_num}:tpl_cyberpunk_sea",
+                }
+            ],
+            [
+                {
+                    "text": "⭐ Industrial Acid",
+                    "callback_data": f"apply_tpl:{slug}:{ratio_code}:{track_num}:tpl_industrial_acid",
+                }
+            ],
+            [
+                {
+                    "text": "⭐ Crimson Breach",
+                    "callback_data": f"apply_tpl:{slug}:{ratio_code}:{track_num}:tpl_crimson_breach",
+                }
+            ],
+            [
+                {
+                    "text": "⭐ Monochrome Void",
+                    "callback_data": f"apply_tpl:{slug}:{ratio_code}:{track_num}:tpl_monochrome_void",
+                }
+            ],
+            [
+                {
+                    "text": "🔙 Back to Studio Menu",
+                    "callback_data": f"pmenu:{slug}:{ratio_code}:{track_num}",
+                }
+            ],
+        ]
+        self.edit_message(message_id, text, buttons)
+
     # ── Asynchronous Render Pipelines with Live Progress ──
 
-    def async_render_track(self, slug: str, track_num: int, aspect_ratio_code: str, message_id: int):
+    def async_render_track(
+        self,
+        slug: str,
+        track_num: int,
+        aspect_ratio_code: str,
+        message_id: int,
+        brief: Optional[ProductionBrief] = None,
+    ):
         """Worker thread: render track video with live multi-stage notifications & photo preview."""
         try:
             ratio_map = {"16_9": "16:9", "9_16": "9:16", "1_1": "1:1"}
@@ -348,6 +739,9 @@ class TelegramBotDaemon:
             track_name = track.title if track else f"Track {track_num}"
             bpm = track.bpm if (track and track.bpm) else 140.0
             key = track.key if (track and track.key) else "F Minor"
+
+            style_name = brief.name if brief else "Brutalist Cyan Cyberpunk"
+            style_pal = brief.color_palette.upper() if brief else "CYAN_PURPLE"
 
             # ── Notification 1: Audio Analysis & Pacing Grid ──
             self.send_message(
@@ -382,6 +776,7 @@ class TelegramBotDaemon:
             # ── Notification 2: Director's Storyboard ──
             self.send_message(
                 f"🎬 <b>PHASE 2: DIRECTOR'S STORYBOARD & KINETIC PROMPTS</b>\n\n"
+                f"• <b>Production Style:</b> {style_name} ({style_pal})\n"
                 f"• <b>[0:00 - 0:03] Hook:</b> Z-axis push-in, Cherenkov blue chiaroscuro, stylized glyph reveal\n"
                 f"• <b>[0:03 - 0:10] Phrase:</b> Brutalist kinetic typography on downbeat, cubic-bezier ease-out\n"
                 f"• <b>[0:10 - 0:15] Climax:</b> Audio-reactive waveform distortion, 120% punch-in zoom on kick\n"
@@ -420,6 +815,7 @@ class TelegramBotDaemon:
                 aspect_ratio=ratio,
                 duration=15.0,
                 output_path=str(final_mp4),
+                brief=brief,
             )
 
             # ── Notification 3: Render Preview Frame & Send Photo ──
@@ -485,13 +881,22 @@ class TelegramBotDaemon:
                 buttons=[[{"text": "🏠 Main Menu", "callback_data": "nav:home"}]]
             )
 
-    def async_render_teaser(self, slug: str, aspect_ratio_code: str, message_id: int):
+    def async_render_teaser(
+        self,
+        slug: str,
+        aspect_ratio_code: str,
+        message_id: int,
+        brief: Optional[ProductionBrief] = None,
+    ):
         """Worker thread: render multi-track album teaser with live notifications & photo preview."""
         try:
             ratio_map = {"16_9": "16:9", "9_16": "9:16", "1_1": "1:1"}
             ratio = ratio_map.get(aspect_ratio_code, "9:16")
             album = self.catalog.get_release(slug)
             album_name = album.title if album else slug.replace("-", " ").title()
+
+            style_name = brief.name if brief else "Cyberpunk Deep Sea"
+            style_pal = brief.color_palette.upper() if brief else "CYAN_PURPLE"
 
             # ── Notification 1: Audio Analysis ──
             track_count = album.track_count if album else 5
@@ -526,6 +931,7 @@ class TelegramBotDaemon:
             # ── Notification 2: Storyboard ──
             self.send_message(
                 f"🎬 <b>PHASE 2: ALBUM TEASER STORYBOARD & KINETIC TYPOGRAPHY</b>\n\n"
+                f"• <b>Production Style:</b> {style_name} ({style_pal})\n"
                 f"• <b>Intro [0:00 - 0:04]:</b> Glitch transition reveals album title & VØIDRIDE monogram\n"
                 f"• <b>Showcase [0:04 - 0:24]:</b> Rapid cuts through tracks with synchronized kinetic titles\n"
                 f"• <b>Outro [0:24 - 0:30]:</b> Master release artwork zoom, audio fadeout, streaming callout\n"
@@ -563,6 +969,7 @@ class TelegramBotDaemon:
                 aspect_ratio=ratio,
                 total_duration=30.0,
                 output_path=str(final_mp4),
+                brief=brief,
             )
 
             # ── Notification 3: Render Preview Frame & Send Photo ──
@@ -638,7 +1045,29 @@ class TelegramBotDaemon:
         message_id = msg.get("message_id")
 
         # 1. Instant Toast Acknowledgment (<50ms)
-        if data.startswith("teaser:"):
+        if data.startswith("pmenu:"):
+            self.answer_callback(cb_id, text="🎨 Opening Production Studio...")
+        elif data.startswith("ask_p:"):
+            self.answer_callback(cb_id, text="✍️ Creative Prompt Injection Mode...")
+        elif data.startswith("show_b:"):
+            self.answer_callback(cb_id, text="📋 Loading Proposed Brief...")
+        elif data.startswith("pal_menu:"):
+            self.answer_callback(cb_id, text="🎨 Opening Palette Selector...")
+        elif data.startswith("set_pal:"):
+            self.answer_callback(cb_id, text="✨ Palette Applied!")
+        elif data.startswith("mot_menu:"):
+            self.answer_callback(cb_id, text="🎥 Opening Camera Motion Selector...")
+        elif data.startswith("set_mot:"):
+            self.answer_callback(cb_id, text="✨ Camera Motion Applied!")
+        elif data.startswith("load_tpl:") or data.startswith("presets:"):
+            self.answer_callback(cb_id, text="📂 Loading Style Templates...")
+        elif data.startswith("apply_tpl:"):
+            self.answer_callback(cb_id, text="✨ Template Applied!")
+        elif data.startswith("save_tpl:"):
+            self.answer_callback(cb_id, text="💾 Template Saved to Library!")
+        elif data.startswith("launch_prod:"):
+            self.answer_callback(cb_id, text="🚀 Launching Production Pipeline...")
+        elif data.startswith("teaser:"):
             self.answer_callback(cb_id, text="🔥 Opening Teaser Format Selector...")
         elif data.startswith("run_teaser:"):
             self.answer_callback(cb_id, text="⚙️ Launching Album Teaser Pipeline...")
@@ -677,20 +1106,156 @@ class TelegramBotDaemon:
             slug = data.split(":", 1)[1]
             self.show_teaser_format_selector(slug, message_id)
 
+        elif data.startswith("pmenu:"):
+            parts = data.split(":")
+            slug = parts[1]
+            ratio_code = parts[2]
+            track_num = int(parts[3])
+            self.show_production_menu(slug, ratio_code, track_num, message_id)
+
+        elif data.startswith("ask_p:"):
+            parts = data.split(":")
+            slug = parts[1]
+            ratio_code = parts[2]
+            track_num = int(parts[3])
+            self.ask_creative_prompt(slug, ratio_code, track_num, message_id)
+
+        elif data.startswith("show_b:"):
+            parts = data.split(":")
+            slug = parts[1]
+            ratio_code = parts[2]
+            track_num = int(parts[3])
+            self.show_proposed_brief(slug, ratio_code, track_num, message_id)
+
+        elif data.startswith("pal_menu:"):
+            parts = data.split(":")
+            slug = parts[1]
+            ratio_code = parts[2]
+            track_num = int(parts[3])
+            self.show_palette_selector(slug, ratio_code, track_num, message_id)
+
+        elif data.startswith("set_pal:"):
+            parts = data.split(":")
+            slug = parts[1]
+            ratio_code = parts[2]
+            track_num = int(parts[3])
+            pal_key = parts[4]
+            brief = self._get_active_brief(slug, ratio_code, track_num)
+            updated = self.upscaler.tweak_palette(brief, pal_key)
+            self.active_briefs[f"{slug}:{ratio_code}:{track_num}"] = updated
+            self.show_proposed_brief(
+                slug,
+                ratio_code,
+                track_num,
+                message_id,
+                notice=f"✨ <i>Color palette updated to <b>{pal_key.upper()}</b>!</i>",
+            )
+
+        elif data.startswith("mot_menu:"):
+            parts = data.split(":")
+            slug = parts[1]
+            ratio_code = parts[2]
+            track_num = int(parts[3])
+            self.show_motion_selector(slug, ratio_code, track_num, message_id)
+
+        elif data.startswith("set_mot:"):
+            parts = data.split(":")
+            slug = parts[1]
+            ratio_code = parts[2]
+            track_num = int(parts[3])
+            mot_key = parts[4]
+            brief = self._get_active_brief(slug, ratio_code, track_num)
+            updated = self.upscaler.tweak_motion(brief, mot_key)
+            self.active_briefs[f"{slug}:{ratio_code}:{track_num}"] = updated
+            self.show_proposed_brief(
+                slug,
+                ratio_code,
+                track_num,
+                message_id,
+                notice=f"✨ <i>Camera motion updated to <b>{mot_key.upper()}</b>!</i>",
+            )
+
+        elif data.startswith("load_tpl:"):
+            parts = data.split(":")
+            slug = parts[1]
+            ratio_code = parts[2]
+            track_num = int(parts[3])
+            self.show_template_picker(slug, ratio_code, track_num, message_id)
+
+        elif data.startswith("presets:"):
+            parts = data.split(":")
+            slug = parts[1]
+            ratio_code = parts[2]
+            track_num = int(parts[3])
+            self.show_presets_picker(slug, ratio_code, track_num, message_id)
+
+        elif data.startswith("apply_tpl:"):
+            parts = data.split(":")
+            slug = parts[1]
+            ratio_code = parts[2]
+            track_num = int(parts[3])
+            tpl_id = parts[4]
+            tpl = self.template_manager.get_template(tpl_id)
+            if tpl:
+                self.active_briefs[f"{slug}:{ratio_code}:{track_num}"] = tpl
+                self.show_proposed_brief(
+                    slug,
+                    ratio_code,
+                    track_num,
+                    message_id,
+                    notice=f"✨ <i>Loaded template: <b>{tpl.name}</b>!</i>",
+                )
+            else:
+                self.show_proposed_brief(slug, ratio_code, track_num, message_id)
+
+        elif data.startswith("save_tpl:"):
+            parts = data.split(":")
+            slug = parts[1]
+            ratio_code = parts[2]
+            track_num = int(parts[3])
+            brief = self._get_active_brief(slug, ratio_code, track_num)
+            saved = self.template_manager.save_template(brief, name=brief.name)
+            self.active_briefs[f"{slug}:{ratio_code}:{track_num}"] = saved
+            self.show_proposed_brief(
+                slug,
+                ratio_code,
+                track_num,
+                message_id,
+                notice=f"💾 <i>Template <b>\"{saved.name}\"</b> saved! You can pull it up anytime.</i>",
+            )
+
         # 3. Asynchronous Heavy Render Pipelines (threaded)
+        elif data.startswith("launch_prod:"):
+            parts = data.split(":")
+            slug = parts[1]
+            ratio_code = parts[2]
+            track_num = int(parts[3])
+            mode = parts[4]
+            brief = (
+                None
+                if mode == "default"
+                else self.active_briefs.get(f"{slug}:{ratio_code}:{track_num}")
+            )
+            if track_num > 0:
+                self.executor.submit(
+                    self.async_render_track, slug, track_num, ratio_code, message_id, brief
+                )
+            else:
+                self.executor.submit(
+                    self.async_render_teaser, slug, ratio_code, message_id, brief
+                )
+
         elif data.startswith("render:"):
             parts = data.split(":")
             slug = parts[1]
             track_num = int(parts[2])
             ratio_code = parts[3]
-            # Spawn in thread pool so polling stays 100% responsive
             self.executor.submit(self.async_render_track, slug, track_num, ratio_code, message_id)
 
         elif data.startswith("run_teaser:"):
             parts = data.split(":")
             slug = parts[1]
             ratio_code = parts[2]
-            # Spawn in thread pool so polling stays 100% responsive
             self.executor.submit(self.async_render_teaser, slug, ratio_code, message_id)
 
         elif data.startswith("finalize:"):
@@ -700,20 +1265,77 @@ class TelegramBotDaemon:
                 "• Engine: Tesseract by Mirage (Local 4K Pro Master)\n"
                 "• Status: Queued in background\n\n"
                 "You will receive an alert with the final package link when rendering completes!",
-                buttons=[[{"text": "🏠 Main Menu", "callback_data": "nav:home"}]]
+                buttons=[[{"text": "🏠 Main Menu", "callback_data": "nav:home"}]],
             )
 
     def handle_message(self, msg: Dict[str, Any]):
         """Handle incoming text messages intelligently."""
         text = msg.get("text", "").strip()
-        from_user = msg.get("from", {}).get("username") or msg.get("from", {}).get("first_name", "user")
+        from_user = (
+            msg.get("from", {}).get("username")
+            or msg.get("from", {}).get("first_name", "user")
+        )
         print(f"[MSG] Received from @{from_user}: '{text}'", flush=True)
 
         if not text:
             return
 
+        # 1. Check if user is actively in Prompt Injection mode
+        user_state = self.user_states.get(str(self.chat_id))
+        if user_state and user_state.get("action") == "awaiting_prompt":
+            slug = user_state["slug"]
+            ratio = user_state["ratio"]
+            track_num = user_state["track_num"]
+            # Clear state immediately so subsequent messages aren't captured
+            del self.user_states[str(self.chat_id)]
+
+            album = self.catalog.get_release(slug)
+            album_name = album.title if album else slug.replace("-", " ").title()
+            track = (
+                album.tracks[track_num - 1]
+                if (album and track_num > 0 and len(album.tracks) >= track_num)
+                else None
+            )
+
+            # Instant zero-wait acknowledgement
+            wait_msg_id = self.send_message(
+                f"✨ <b>PROMPT RECEIVED:</b> <i>\"{text}\"</i>\n\n"
+                f"• <b>Engine:</b> Venice AI (<code>deepseek-v4-flash</code>)\n"
+                f"• <b>Target:</b> {album_name}\n"
+                f"• <b>Status:</b> Synthesizing 6-vector brutalist brief & palette..."
+            )
+
+            def _upscale_worker():
+                try:
+                    brief = self.upscaler.upscale_prompt(
+                        raw_prompt=text,
+                        album_name=album_name,
+                        track_name=track.title if track else None,
+                        genre=album.genre if album else "Industrial Cyberpunk",
+                    )
+                    session_key = f"{slug}:{ratio}:{track_num}"
+                    self.active_briefs[session_key] = brief
+                    self.show_proposed_brief(slug, ratio, track_num, message_id=wait_msg_id)
+                except Exception as e:
+                    traceback.print_exc()
+
+            self.executor.submit(_upscale_worker)
+            return
+
         text_lower = text.lower()
-        if text_lower in ["/start", "/albums", "/menu", "/help", "hi", "hello", "hey", "menu", "start", "home", "albums"]:
+        if text_lower in [
+            "/start",
+            "/albums",
+            "/menu",
+            "/help",
+            "hi",
+            "hello",
+            "hey",
+            "menu",
+            "start",
+            "home",
+            "albums",
+        ]:
             self.show_home_menu()
             return
 
@@ -739,9 +1361,14 @@ class TelegramBotDaemon:
             f"Tap an option below to browse releases or create a video teaser:"
         )
         buttons = [
-            [{"text": "🔥 Abyss Throttle Teaser (9:16)", "callback_data": "run_teaser:abyss-throttle:9_16"}],
+            [
+                {
+                    "text": "🔥 Abyss Throttle Teaser (9:16)",
+                    "callback_data": "pmenu:abyss-throttle:9_16:0",
+                }
+            ],
             [{"text": "📁 Browse All Releases", "callback_data": "nav:all_albums:0"}],
-            [{"text": "🏠 Main Menu", "callback_data": "nav:home"}]
+            [{"text": "🏠 Main Menu", "callback_data": "nav:home"}],
         ]
         self.send_message(reply_text, buttons)
 
