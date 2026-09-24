@@ -55,7 +55,7 @@ from src.storyboard.prompt_upscaler import (
 class TelegramBotDaemon:
     """Multi-threaded daemon ensuring instant UI feedback and real-time progress."""
 
-    def __init__(self):
+    def __init__(self, enforce_single: bool = True):
         self.bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
         self.chat_id = os.environ.get("TELEGRAM_CHAT_ID", "8293122782")
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
@@ -79,7 +79,8 @@ class TelegramBotDaemon:
         self.active_briefs: Dict[str, ProductionBrief] = {}
 
         # Enforce single active daemon to eliminate 409 Conflict
-        self._enforce_single_instance()
+        if enforce_single:
+            self._enforce_single_instance()
 
         # Thread pool for asynchronous rendering jobs so polling never freezes
         self.executor = ThreadPoolExecutor(max_workers=4)
@@ -403,7 +404,7 @@ class TelegramBotDaemon:
             f"• <b>Engine:</b> Motion Director (Dynamic Camera + Waveform + HUD)\n\n"
             f"Choose how you want to direct this production:\n"
             f"• ⚡ <b>Studio Default:</b> Fast 1-tap Cyberpunk render\n"
-            f"• ✍️ <b>Inject Creative Prompt:</b> Venice AI (deepseek-v4-flash) upscales your vision\n"
+            f"• ✍️ <b>Inject Creative Prompt:</b> Venice AI ({self.upscaler.model}) upscales your vision\n"
             f"• 📂 <b>Load Style Template:</b> Apply saved or built-in style in 1 tap\n"
             f"• 🎲 <b>Studio Presets:</b> Quick 4-aesthetic studio styles"
         )
@@ -467,7 +468,7 @@ class TelegramBotDaemon:
             f"• <i>\"Toxic acid green biohazard factory with flashing strobe alarms and corrosive cuts\"</i>\n"
             f"• <i>\"Emergency crimson alarm strobe with aggressive drop punches\"</i>\n"
             f"• <i>\"Obsidian monochrome horizon with amber telemetry and slow zero-gravity drift\"</i>\n\n"
-            f"⚡ <i>Venice AI (deepseek-v4-flash) will upscale your concept into a 6-vector Production Brief with instant interactive customization buttons.</i>"
+            f"⚡ <i>Venice AI ({self.upscaler.model}) will upscale your concept into a 6-vector Production Brief with instant interactive customization buttons.</i>"
         )
 
         buttons = [
@@ -1142,6 +1143,8 @@ class TelegramBotDaemon:
             pal_key = parts[4]
             brief = self._get_active_brief(slug, ratio_code, track_num)
             updated = self.upscaler.tweak_palette(brief, pal_key)
+            if not updated.is_built_in:
+                updated = self.template_manager.save_template(updated, name=updated.name)
             self.active_briefs[f"{slug}:{ratio_code}:{track_num}"] = updated
             self.show_proposed_brief(
                 slug,
@@ -1166,6 +1169,8 @@ class TelegramBotDaemon:
             mot_key = parts[4]
             brief = self._get_active_brief(slug, ratio_code, track_num)
             updated = self.upscaler.tweak_motion(brief, mot_key)
+            if not updated.is_built_in:
+                updated = self.template_manager.save_template(updated, name=updated.name)
             self.active_briefs[f"{slug}:{ratio_code}:{track_num}"] = updated
             self.show_proposed_brief(
                 slug,
@@ -1236,6 +1241,11 @@ class TelegramBotDaemon:
                 if mode == "default"
                 else self.active_briefs.get(f"{slug}:{ratio_code}:{track_num}")
             )
+            # Ensure any custom active brief is permanently saved as a template in templates.json
+            if brief and not brief.is_built_in:
+                brief = self.template_manager.save_template(brief, name=brief.name)
+                self.active_briefs[f"{slug}:{ratio_code}:{track_num}"] = brief
+
             if track_num > 0:
                 self.executor.submit(
                     self.async_render_track, slug, track_num, ratio_code, message_id, brief
@@ -1300,7 +1310,7 @@ class TelegramBotDaemon:
             # Instant zero-wait acknowledgement
             wait_msg_id = self.send_message(
                 f"✨ <b>PROMPT RECEIVED:</b> <i>\"{text}\"</i>\n\n"
-                f"• <b>Engine:</b> Venice AI (<code>deepseek-v4-flash</code>)\n"
+                f"• <b>Engine:</b> Venice AI (<code>{self.upscaler.model}</code>)\n"
                 f"• <b>Target:</b> {album_name}\n"
                 f"• <b>Status:</b> Synthesizing 6-vector brutalist brief & palette..."
             )
@@ -1313,9 +1323,12 @@ class TelegramBotDaemon:
                         track_name=track.title if track else None,
                         genre=album.genre if album else "Industrial Cyberpunk",
                     )
+                    # Automatically persist this custom upscaled brief as a template in templates.json
+                    saved = self.template_manager.save_template(brief, name=brief.name)
                     session_key = f"{slug}:{ratio}:{track_num}"
-                    self.active_briefs[session_key] = brief
-                    self.show_proposed_brief(slug, ratio, track_num, message_id=wait_msg_id)
+                    self.active_briefs[session_key] = saved
+                    notice = f"💾 <i>New template <b>\"{saved.name}\"</b> created & saved to your Library!</i>"
+                    self.show_proposed_brief(slug, ratio, track_num, message_id=wait_msg_id, notice=notice)
                 except Exception as e:
                     traceback.print_exc()
 

@@ -81,6 +81,8 @@ class MotionDirector:
         catalog_code: str = "VØID-019",
         primary_color: str = "#00f0ff",
         accent_color: str = "#7000ff",
+        subtitle_header: Optional[str] = None,
+        style_tag: Optional[str] = None,
     ) -> str:
         """Render a cyberpunk / brutalist HUD graphic overlay with transparent background."""
         img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -96,9 +98,11 @@ class MotionDirector:
         # ── Top Header HUD ──
         header_y1 = 60
         header_y2 = 135
+        header_title = subtitle_header or f"{album_title.upper()} — OFFICIAL ALBUM TEASER"
+        style_suffix = f" // {style_tag.upper()}" if style_tag else ""
         draw.rectangle([40, header_y1, width - 40, header_y2], fill=dark_box, outline=primary_dim, width=2)
-        draw.text((60, header_y1 + 12), f"// VØIDRIDE RECORDS // {catalog_code}", fill=primary_rgb, font=self.font_mono)
-        draw.text((60, header_y1 + 38), f"{album_title.upper()} — OFFICIAL ALBUM TEASER", fill=white, font=self.font_subtitle)
+        draw.text((60, header_y1 + 12), f"// VØIDRIDE RECORDS // {catalog_code}{style_suffix}", fill=primary_rgb, font=self.font_mono)
+        draw.text((60, header_y1 + 38), header_title, fill=white, font=self.font_subtitle)
 
         # ── Lower Third Track Badge ──
         badge_y1 = height - 340
@@ -318,6 +322,7 @@ class MotionDirector:
                 # 2. Generate custom HUD overlay
                 hud_png = temp_dir / f"hud_{idx}.png"
                 meta_line = subtitles[(idx - 1) % len(subtitles)]
+                style_name = brief.name if brief else None
                 self.create_hud_overlay(
                     output_png=str(hud_png),
                     width=w,
@@ -330,6 +335,8 @@ class MotionDirector:
                     catalog_code="VØID-019",
                     primary_color=primary_color,
                     accent_color=accent_color,
+                    subtitle_header=f"{album.title.upper()} — OFFICIAL ALBUM TEASER",
+                    style_tag=style_name,
                 )
 
                 # 3. Render kinetic motion clip with reactive waveform
@@ -458,6 +465,7 @@ class MotionDirector:
         temp_dir = Path(tempfile.mkdtemp(prefix=f"vis_{slug}_"))
         try:
             hud_png = temp_dir / "hud.png"
+            style_name = brief.name if brief else None
             self.create_hud_overlay(
                 output_png=str(hud_png),
                 width=w,
@@ -470,6 +478,8 @@ class MotionDirector:
                 catalog_code="VØID-019",
                 primary_color=primary_color,
                 accent_color=accent_color,
+                subtitle_header=f"{album.title.upper()} — OFFICIAL TRACK VISUALIZER",
+                style_tag=style_name,
             )
 
             success = self.render_motion_clip(

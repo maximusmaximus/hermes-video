@@ -75,7 +75,7 @@ class PromptUpscaler:
         budget_ledger: Optional[BudgetLedger] = None,
         api_key: Optional[str] = None,
         api_url: str = "https://api.venice.ai/api/v1/chat/completions",
-        model: str = "deepseek-v4-flash",
+        model: str = "mistral-small-3-2-24b-instruct",
     ):
         self.budget_ledger = budget_ledger or BudgetLedger()
         self.api_url = api_url
@@ -147,22 +147,28 @@ class PromptUpscaler:
         genre: str,
     ) -> Optional[ProductionBrief]:
         """Query Venice AI for intelligent brief expansion."""
+        models_to_try = [self.model]
+        if "mistral" in self.model:
+            models_to_try.append("deepseek-v4-flash")
+        elif "deepseek" in self.model:
+            models_to_try.append("mistral-small-3-2-24b-instruct")
+
         system_prompt = (
             "You are the Chief Motion Graphics & Visual Director for VØIDRIDE Records.\n"
             "Your task: Transform the user's creative prompt into a precise 6-Vector Video Production Brief adhering to the brutalist cyberpunk studio aesthetic.\n\n"
             "OUTPUT RULES:\n"
             "1. Output ONLY a valid JSON object. No explanation, no markdown text outside the JSON.\n"
             "2. Fields required:\n"
-            "   - name: Short evocative 2-4 word style name (e.g. 'Abyssal Flare', 'Neon Acid Breach')\n"
+            "   - name: Short evocative 2-4 word style name (e.g. 'Abyssal Flare', 'Martian Firestorm', 'Neon Acid Breach')\n"
             "   - theme: 1-2 punchy sentences describing lighting, textures, particle effects, and mood\n"
             "   - color_palette: Exactly one of ['cyan_purple', 'acid_green', 'crimson_red', 'monochrome_gold']\n"
-            "   - primary_color: Hex color string (e.g. '#00f0ff', '#39ff14', '#ff003c', '#ffffff')\n"
+            "   - primary_color: Hex color string (e.g. '#00f0ff', '#39ff14', '#ff003c', '#ff3300', '#ffffff')\n"
             "   - accent_color: Secondary hex color string (e.g. '#7000ff', '#00ffcc', '#ff8800', '#ffb000')\n"
             "   - camera_motion: Exactly one of ['push_in', 'pan_drift', 'punch_climax', 'ambient_float', 'zoom_out']\n"
             "   - typography_style: Exactly one of ['brutalist_mono', 'warning_industrial', 'minimal_clean']\n"
             "   - waveform_style: One of ['cyan', 'green', 'red', 'gold', 'white']\n"
-            "   - waveform_hex: 0x followed by 6 hex chars (e.g. '0x00f0ff')\n"
-            "   - subtitles: An array of exactly 5 brutalist telemetry / track overlay captions (e.g. '140 BPM // D# MINOR // SUB-BASS TRANSIENT LOCK')\n"
+            "   - waveform_hex: 0x followed by 6 hex chars (e.g. '0x00f0ff', '0xff3300')\n"
+            "   - subtitles: An array of exactly 5 brutalist telemetry / track overlay captions matching the concept\n"
         )
 
         user_content = (
@@ -172,95 +178,97 @@ class PromptUpscaler:
             f"Musical Genre: \"{genre}\"\n"
         )
 
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            "temperature": 0.4,
-            "max_tokens": 800,
-        }
+        for current_model in models_to_try:
+            payload = {
+                "model": current_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                "temperature": 0.3,
+                "max_tokens": 800,
+            }
 
-        req = urllib.request.Request(
-            self.api_url,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            data=json.dumps(payload).encode("utf-8"),
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=12) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-
-            choice = data.get("choices", [{}])[0]
-            content = choice.get("message", {}).get("content", "")
-            usage = data.get("usage", {})
-            in_tokens = usage.get("prompt_tokens", 800)
-            out_tokens = usage.get("completion_tokens", 350)
-
-            # Record in Budget Ledger
-            cost = self.budget_ledger.calculate_cost(self.model, in_tokens, out_tokens)
-            self.budget_ledger.record_usage(
-                role="controller",
-                model=self.model,
-                input_tokens=in_tokens,
-                output_tokens=out_tokens,
-                cost_usd=cost,
-                metadata={"action": "prompt_upscale", "prompt": raw_prompt[:60]},
+            req = urllib.request.Request(
+                self.api_url,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                data=json.dumps(payload).encode("utf-8"),
             )
 
-            # Parse JSON from content (strip markdown tags or whitespace)
-            clean = re.sub(r"^```(?:json)?\s*", "", content.strip(), flags=re.MULTILINE)
-            clean = re.sub(r"```$", "", clean.strip(), flags=re.MULTILINE)
-            match = re.search(r"\{.*\}", clean, re.DOTALL)
-            if match:
-                clean = match.group(0)
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
 
-            parsed = json.loads(clean)
+                choice = data.get("choices", [{}])[0]
+                content = choice.get("message", {}).get("content", "")
+                usage = data.get("usage", {})
+                in_tokens = usage.get("prompt_tokens", 800)
+                out_tokens = usage.get("completion_tokens", 350)
 
-            # Ensure palette consistency
-            palette_key = parsed.get("color_palette", "cyan_purple")
-            if palette_key not in COLOR_PALETTES:
-                palette_key = "cyan_purple"
-            ref_pal = COLOR_PALETTES[palette_key]
+                # Record in Budget Ledger
+                cost = self.budget_ledger.calculate_cost(current_model, in_tokens, out_tokens)
+                self.budget_ledger.record_usage(
+                    role="controller",
+                    model=current_model,
+                    input_tokens=in_tokens,
+                    output_tokens=out_tokens,
+                    cost_usd=cost,
+                    metadata={"action": "prompt_upscale", "prompt": raw_prompt[:60]},
+                )
 
-            primary = parsed.get("primary_color") or ref_pal["primary"]
-            accent = parsed.get("accent_color") or ref_pal["accent"]
-            waveform_hex = parsed.get("waveform_hex") or ref_pal["waveform_hex"]
+                # Parse JSON from content (strip markdown tags or whitespace)
+                clean = re.sub(r"^```(?:json)?\s*", "", content.strip(), flags=re.MULTILINE)
+                clean = re.sub(r"```$", "", clean.strip(), flags=re.MULTILINE)
+                match = re.search(r"\{.*\}", clean, re.DOTALL)
+                if match:
+                    clean = match.group(0)
 
-            subs = parsed.get("subtitles", [])
-            if not isinstance(subs, list) or len(subs) < 5:
-                subs = [
-                    f"140 BPM // {album_name.upper()} // TRANSIENT LOCK",
-                    "144 BPM // RESONANT SUB-BASS MODULATION",
-                    "140 BPM // TELEMETRY LINK ESTABLISHED",
-                    "142 BPM // KINETIC PHASE COHERENCE",
-                    f"145 BPM // {album_name.upper()} // OUT NOW ON VØIDRIDE",
-                ]
+                parsed = json.loads(clean)
 
-            return ProductionBrief(
-                id=f"brief_{uuid.uuid4().hex[:8]}",
-                name=parsed.get("name", "Upscaled Style Brief"),
-                theme=parsed.get("theme", f"Cinematic brutalist visualizer tailored for {album_name}"),
-                color_palette=palette_key,
-                primary_color=primary,
-                accent_color=accent,
-                camera_motion=parsed.get("camera_motion", "push_in"),
-                typography_style=parsed.get("typography_style", "brutalist_mono"),
-                waveform_style=parsed.get("waveform_style", ref_pal["waveform_style"]),
-                waveform_hex=waveform_hex,
-                subtitles=subs[:5],
-                raw_prompt=raw_prompt,
-                created_at=datetime.datetime.utcnow().isoformat() + "Z",
-                is_built_in=False,
-            )
+                # Ensure palette consistency
+                palette_key = parsed.get("color_palette", "cyan_purple")
+                if palette_key not in COLOR_PALETTES:
+                    palette_key = "cyan_purple"
+                ref_pal = COLOR_PALETTES[palette_key]
 
-        except Exception as e:
-            # Return None to trigger heuristic fallback
-            return None
+                primary = parsed.get("primary_color") or ref_pal["primary"]
+                accent = parsed.get("accent_color") or ref_pal["accent"]
+                waveform_hex = parsed.get("waveform_hex") or ref_pal["waveform_hex"]
+
+                subs = parsed.get("subtitles", [])
+                if not isinstance(subs, list) or len(subs) < 5:
+                    subs = [
+                        f"140 BPM // {album_name.upper()} // TRANSIENT LOCK",
+                        "144 BPM // RESONANT SUB-BASS MODULATION",
+                        "140 BPM // TELEMETRY LINK ESTABLISHED",
+                        "142 BPM // KINETIC PHASE COHERENCE",
+                        f"145 BPM // {album_name.upper()} // OUT NOW ON VØIDRIDE",
+                    ]
+
+                return ProductionBrief(
+                    id=f"brief_{uuid.uuid4().hex[:8]}",
+                    name=parsed.get("name", "Upscaled Style Brief"),
+                    theme=parsed.get("theme", f"Cinematic brutalist visualizer tailored for {album_name}"),
+                    color_palette=palette_key,
+                    primary_color=primary,
+                    accent_color=accent,
+                    camera_motion=parsed.get("camera_motion", "push_in"),
+                    typography_style=parsed.get("typography_style", "brutalist_mono"),
+                    waveform_style=parsed.get("waveform_style", ref_pal["waveform_style"]),
+                    waveform_hex=waveform_hex,
+                    subtitles=subs[:5],
+                    raw_prompt=raw_prompt,
+                    created_at=datetime.datetime.utcnow().isoformat() + "Z",
+                    is_built_in=False,
+                )
+
+            except Exception:
+                continue
+
+        return None
 
     def _heuristic_fallback(
         self,
@@ -272,51 +280,100 @@ class PromptUpscaler:
         """Deterministic smart keyword matcher for offline or budget-limited scenarios."""
         lower = raw_prompt.lower()
 
-        if any(w in lower for w in ["acid", "green", "toxic", "biohazard", "corrosive", "chemical"]):
+        if any(w in lower for w in ["mars", "desert", "burning", "fire", "mad max", "flame", "apocalypse", "inferno", "dune", "wasteland", "pyro"]):
+            palette_key = "crimson_red"
+            motion = "punch_climax"
+            name = "Martian Mad Max Wasteland"
+            theme = "Scorched Martian red dunes, burning neon pyres, apocalyptic Mad Max dust storms, and violent atmospheric drop impacts."
+            typo = "warning_industrial"
+            primary_override = "#ff3300"
+            accent_override = "#ff8800"
+            waveform_override = "0xff3300"
+            subtitles = [
+                f"145 BPM // {album_name.upper()} // MARS ATMOSPHERIC ENTRY",
+                "145 BPM // APOCALYPTIC DUST FIRES // SECTOR 04",
+                "148 BPM // XENOMORPHIC BREACH CONFIRMED",
+                "146 BPM // BURNING MAN PYROCLASTIC TRANSIENTS",
+                f"150 BPM // {album_name.upper()} // OUT NOW ON VØIDRIDE",
+            ]
+        elif any(w in lower for w in ["alien", "horror", "monster", "xeno", "xenomorph", "dread", "nightmare", "creature", "terror", "creepy"]):
+            palette_key = "acid_green"
+            motion = "punch_climax"
+            name = "Xenomorphic Horror Protocol"
+            theme = "Subterranean xenomorphic bio-horror, flickering emergency stroboscopic lighting, and high-tension dread."
+            typo = "warning_industrial"
+            primary_override = "#39ff14"
+            accent_override = "#9900ff"
+            waveform_override = "0x39ff14"
+            subtitles = [
+                f"140 BPM // {album_name.upper()} // LIFEFORM DETECTED",
+                "142 BPM // CONTAINMENT BREACH // SECTOR HAZARD",
+                "145 BPM // XENO TRANSIENT ATTACK VECTOR",
+                "144 BPM // NEUROTOXIC PULSE COHERENCE",
+                f"148 BPM // {album_name.upper()} // OUT NOW ON VØIDRIDE",
+            ]
+        elif any(w in lower for w in ["acid", "green", "toxic", "biohazard", "corrosive", "chemical"]):
             palette_key = "acid_green"
             motion = "pan_drift"
             name = "Toxic Biohazard Protocol"
             theme = "Corrosive chemical facilities, toxic warning telemetry, high-speed lateral motion."
             typo = "warning_industrial"
-        elif any(w in lower for w in ["red", "crimson", "blood", "alarm", "fire", "danger", "breach"]):
+            primary_override = None
+            accent_override = None
+            waveform_override = None
+            subtitles = None
+        elif any(w in lower for w in ["red", "crimson", "blood", "alarm", "danger", "breach"]):
             palette_key = "crimson_red"
             motion = "punch_climax"
             name = "Emergency Breach Directive"
             theme = "Catastrophic hull pressure alerts, intense strobe pulses, aggressive kinetic zoom punches."
             typo = "brutalist_mono"
+            primary_override = None
+            accent_override = None
+            waveform_override = None
+            subtitles = None
         elif any(w in lower for w in ["gold", "mono", "amber", "black", "white", "void", "minimal"]):
             palette_key = "monochrome_gold"
             motion = "ambient_float"
             name = "Obsidian Zero-G Void"
             theme = "Monochrome brutalist obsidian horizons, warm amber telemetry, zero-gravity floating camera."
             typo = "minimal_clean"
+            primary_override = None
+            accent_override = None
+            waveform_override = None
+            subtitles = None
         else:
             palette_key = "cyan_purple"
             motion = "push_in"
             name = "Deep Sea Cyber-Abyss"
             theme = "Bioluminescent hadal trench visuals, deep crushing sub-bass ripples, high-contrast cyan glow."
             typo = "brutalist_mono"
+            primary_override = None
+            accent_override = None
+            waveform_override = None
+            subtitles = None
 
         pal = COLOR_PALETTES[palette_key]
-        subtitles = [
-            f"140 BPM // {album_name.upper()} // TRANSIENT LOCK",
-            "144 BPM // RESONANT SUB-BASS MODULATION",
-            "140 BPM // TELEMETRY LINK ESTABLISHED",
-            "142 BPM // KINETIC PHASE COHERENCE",
-            f"145 BPM // {album_name.upper()} // OUT NOW ON VØIDRIDE",
-        ]
+        if not subtitles:
+            subtitles = [
+                f"140 BPM // {album_name.upper()} // TRANSIENT LOCK",
+                "144 BPM // RESONANT SUB-BASS MODULATION",
+                "140 BPM // TELEMETRY LINK ESTABLISHED",
+                "142 BPM // KINETIC PHASE COHERENCE",
+                f"145 BPM // {album_name.upper()} // OUT NOW ON VØIDRIDE",
+            ]
 
         return ProductionBrief(
             id=f"brief_{uuid.uuid4().hex[:8]}",
             name=name,
             theme=theme,
             color_palette=palette_key,
-            primary_color=pal["primary"],
-            accent_color=pal["accent"],
+            primary_color=primary_override or pal["primary"],
+            accent_color=accent_override or pal["accent"],
             camera_motion=motion,
             typography_style=typo,
             waveform_style=pal["waveform_style"],
-            waveform_hex=pal["waveform_hex"],
+            waveform_hex=waveform_override or pal["waveform_hex"],
             subtitles=subtitles,
             raw_prompt=raw_prompt,
             created_at=datetime.datetime.utcnow().isoformat() + "Z",

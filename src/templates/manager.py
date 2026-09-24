@@ -178,7 +178,7 @@ class TemplateManager:
     ) -> ProductionBrief:
         """Save a new custom template or update existing."""
         templates = self.list_templates()
-        new_id = f"custom_{uuid.uuid4().hex[:8]}" if brief.id.startswith("tpl_") or not brief.id else brief.id
+        new_id = brief.id if (brief.id and brief.id.startswith("custom_")) else f"custom_{uuid.uuid4().hex[:8]}"
         custom_name = name or brief.name or "Custom Production Style"
 
         new_brief = ProductionBrief(

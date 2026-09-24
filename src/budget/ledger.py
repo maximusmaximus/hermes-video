@@ -24,6 +24,7 @@ class BudgetExceededException(Exception):
 # Venice AI default estimated pricing per 1,000 tokens (USD)
 DEFAULT_MODEL_PRICING = {
     # Text / Reasoning models
+    "mistral-small-3-2-24b-instruct": {"input_per_1k": 0.00010, "output_per_1k": 0.00030},
     "deepseek-v4-flash": {"input_per_1k": 0.00015, "output_per_1k": 0.00060},
     "deepseek-v4-pro": {"input_per_1k": 0.00050, "output_per_1k": 0.00200},
     "llama-3.3-70b": {"input_per_1k": 0.00040, "output_per_1k": 0.00080},

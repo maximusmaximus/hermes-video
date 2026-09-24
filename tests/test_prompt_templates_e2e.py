@@ -132,6 +132,22 @@ class TestPromptUpscaler(unittest.TestCase):
         self.assertEqual(brief.waveform_hex, "0xff003c")
         self.assertEqual(brief.camera_motion, "punch_climax")
 
+    def test_heuristic_keyword_mars_mad_max(self):
+        prompt = "Make a crazy mars landing is dramatic, aliens and think horror movie but with burning man mad max vibes"
+        brief = self.upscaler._heuristic_fallback(prompt, "Mars Descent", "APOGEE_DRIFT", "Industrial")
+        self.assertEqual(brief.color_palette, "crimson_red")
+        self.assertEqual(brief.primary_color, "#ff3300")
+        self.assertEqual(brief.camera_motion, "punch_climax")
+        self.assertIn("Martian", brief.name)
+
+    def test_heuristic_keyword_xenomorph_horror(self):
+        prompt = "Deep space alien horror dread with xenomorph nightmare creature"
+        brief = self.upscaler._heuristic_fallback(prompt, "Cryoclastic Zero", None, "Dark Ambient")
+        self.assertEqual(brief.color_palette, "acid_green")
+        self.assertEqual(brief.primary_color, "#39ff14")
+        self.assertEqual(brief.camera_motion, "punch_climax")
+        self.assertIn("Horror", brief.name)
+
     def test_heuristic_keyword_monochrome_void(self):
         prompt = "Stark minimal obsidian void with warm amber gold telemetry"
         brief = self.upscaler._heuristic_fallback(prompt, "Sigil Engine", None, "Dark Ambient")
@@ -235,6 +251,26 @@ class TestMotionDirectorBriefInjection(unittest.TestCase):
         self.assertTrue(out_png.exists())
         self.assertGreater(out_png.stat().st_size, 5000)
 
+    def test_create_hud_overlay_with_custom_headers(self):
+        out_png = Path(self.tmpdir.name) / "test_hud_track.png"
+        self.motion.create_hud_overlay(
+            output_png=str(out_png),
+            width=1080,
+            height=1080,
+            album_title="Mars Descent",
+            track_number=1,
+            total_tracks=5,
+            track_title="Apogee Drift",
+            metadata_line="145 BPM // D# MINOR",
+            catalog_code="VØID-019",
+            primary_color="#ff3300",
+            accent_color="#ff8800",
+            subtitle_header="MARS DESCENT — OFFICIAL TRACK VISUALIZER",
+            style_tag="Martian Firestorm",
+        )
+        self.assertTrue(out_png.exists())
+        self.assertGreater(out_png.stat().st_size, 5000)
+
 
 class TestDaemonWorkflowIntegration(unittest.TestCase):
     """Test suite for TelegramBotDaemon prompt injection & template studio flow."""
@@ -249,7 +285,7 @@ class TestDaemonWorkflowIntegration(unittest.TestCase):
             "TELEGRAM_CHAT_ID": "8293122782",
             "VENICE_CONTROLLER_KEY": "",
         }):
-            self.daemon = TelegramBotDaemon()
+            self.daemon = TelegramBotDaemon(enforce_single=False)
             self.daemon.budget = BudgetLedger(db_path=str(db_path))
             self.daemon.template_manager = TemplateManager(storage_path=str(tpl_path))
             self.daemon.upscaler = PromptUpscaler(budget_ledger=self.daemon.budget, api_key="")
@@ -325,6 +361,11 @@ class TestDaemonWorkflowIntegration(unittest.TestCase):
         self.assertEqual(brief.color_palette, "acid_green")
         self.assertEqual(brief.primary_color, "#39ff14")
 
+        # Automatically persisted as custom template
+        saved_templates = self.daemon.template_manager.list_templates()
+        custom = [t for t in saved_templates if not t.is_built_in]
+        self.assertGreaterEqual(len(custom), 1)
+
     def test_set_pal_callback(self):
         session_key = "abyss-throttle:9_16:0"
         self.daemon._get_active_brief("abyss-throttle", "9_16", 0)
@@ -366,6 +407,38 @@ class TestDaemonWorkflowIntegration(unittest.TestCase):
         active = self.daemon.active_briefs.get(session_key)
         self.assertEqual(active.id, "tpl_industrial_acid")
         self.assertEqual(active.color_palette, "acid_green")
+
+    def test_launch_prod_autosaves_custom_brief(self):
+        session_key = "mars-descent:1_1:1"
+        brief = ProductionBrief(
+            id="brief_unsaved_123",
+            name="Apocalyptic Mars Teaser",
+            theme="Dramatic Mars landing",
+            color_palette="crimson_red",
+            primary_color="#ff3300",
+            accent_color="#ff8800",
+            camera_motion="punch_climax",
+            typography_style="warning_industrial",
+            waveform_style="red",
+            waveform_hex="0xff3300",
+            subtitles=["145 BPM // MARS ENTRY"],
+            is_built_in=False,
+        )
+        self.daemon.active_briefs[session_key] = brief
+
+        with patch.object(self.daemon.executor, "submit") as mock_submit:
+            cb = {
+                "id": "cb_launch",
+                "data": "launch_prod:mars-descent:1_1:1:active",
+                "message": {"message_id": 100},
+            }
+            self.daemon.handle_callback_query(cb)
+            mock_submit.assert_called_once()
+
+        # Brief should now be saved in template manager
+        saved = [t for t in self.daemon.template_manager.list_templates() if t.name == "Apocalyptic Mars Teaser"]
+        self.assertEqual(len(saved), 1)
+        self.assertTrue(saved[0].id.startswith("custom_"))
 
 
 if __name__ == "__main__":
